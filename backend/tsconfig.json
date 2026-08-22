@@ -1,0 +1,63 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "declaration": false,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "ES2021",
+    "sourceMap": true,
+    "outDir": "./dist",
+    /**
+     * `backend-database/` lives *outside* this directory, so the compilation
+     * root has to be the repo root or TypeScript refuses the inputs (TS6059).
+     * That is what puts the emitted API under `dist/backend/src/` and the
+     * shared schemas under `dist/backend-database/` — see
+     * `src/register-aliases.ts`, which maps the two `paths` entries below onto
+     * exactly those emitted directories at runtime.
+     */
+    "rootDir": "..",
+    "incremental": true,
+    "skipLibCheck": true,
+    "strictNullChecks": true,
+    "noImplicitAny": true,
+    "strictBindCallApply": true,
+    "forceConsistentCasingInFileNames": true,
+    "noFallthroughCasesInSwitch": true,
+    /**
+     * Two distinct aliases, deliberately.
+     *
+     * A single `@/*` pointing at both `../backend-database/*` and `./src/*`
+     * resolved fine for the type-checker but was unresolvable at runtime: the
+     * emitted JS keeps the literal `require("@/schemas/user.schema")`, and no
+     * single runtime alias can fan one prefix out across two directories.
+     * Splitting the persistence layer onto its own `@db/*` prefix makes each
+     * alias a 1:1 directory mapping — resolvable at runtime, and it makes a
+     * cross-service import visible as such at the call site.
+     */
+    "paths": {
+      "@/*": ["./src/*"],
+      "@db/*": ["../backend-database/*"],
+      /**
+       * `backend-database/` has no `node_modules` of its own, and it sits
+       * beside `backend/` rather than beneath it — so TypeScript's upward
+       * lookup from those sources never reaches the installed packages and
+       * every import there reported TS2307. Runtime was always fine (the
+       * emitted JS lands in `backend/dist/`, which *is* under a directory with
+       * `node_modules`); this realigns the type-checker with where the code
+       * actually resolves its dependencies from.
+       *
+       * Listed package-by-package rather than as a blanket `"*"` mapping: a
+       * wildcard here is consulted ahead of the normal resolver and resolves
+       * e.g. `express` straight to its untyped `index.js`, suppressing the
+       * `@types/express` lookup that would otherwise supply the declarations.
+       * These three are the complete set of externals the schemas import.
+       */
+      "@nestjs/*": ["./node_modules/@nestjs/*"],
+      "mongoose": ["./node_modules/mongoose"]
+    }
+  },
+  "include": ["src/**/*", "../backend-database/**/*"],
+  "exclude": ["node_modules", "dist", "../backend-database/**/*.js", "../backend-database/**/*.d.ts"]
+}

@@ -1,0 +1,15 @@
+# ClusterIP, named `mongo` — the backend connects via this DNS name
+# (MONGODB_URI in db-secret.yaml reads mongodb://mongo:27017/trekeasy). Never
+# needs external exposure, so ClusterIP (the default) is the right type.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo
+  namespace: myapp
+spec:
+  type: ClusterIP
+  selector:
+    app: mongo
+  ports:
+    - port: 27017
+      targetPort: 27017

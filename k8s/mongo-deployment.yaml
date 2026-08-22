@@ -1,0 +1,61 @@
+# The runtime identity of the "backend-database" microservice — see
+# backend-database/Dockerfile. A single-replica Deployment + PVC rather than a
+# StatefulSet: fine for a single Mongo instance with one persistent volume,
+# which is what this app needs (no replica set).
+#
+# Build the image into Minikube's Docker daemon before applying:
+#   eval $(minikube docker-env)
+#   docker build -f backend-database/Dockerfile -t trekeasy-mongo:latest backend-database
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongo
+  namespace: myapp
+spec:
+  replicas: 1
+  strategy:
+    # A second Mongo pod cannot share the same ReadWriteOnce PVC, so a rolling
+    # update would deadlock waiting for a volume already attached to the pod
+    # it is trying to replace. Recreate tears the old pod down first.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mongo
+  template:
+    metadata:
+      labels:
+        app: mongo
+    spec:
+      containers:
+        - name: mongo
+          image: trekeasy-mongo:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 27017
+          env:
+            - name: MONGO_INITDB_DATABASE
+              value: trekeasy
+          volumeMounts:
+            - name: mongo-storage
+              mountPath: /data/db
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            exec:
+              command: ['mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ['mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
+            initialDelaySeconds: 20
+            periodSeconds: 20
+      volumes:
+        - name: mongo-storage
+          persistentVolumeClaim:
+            claimName: mongo-pvc

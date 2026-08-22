@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2021",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "lib": ["ES2021"],
+    "strict": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["jest", "detox", "node"],
+    "baseUrl": "..",
+    "paths": {
+      "@/*": ["./*"],
+      /**
+       * `backend/` is a sibling of `frontend/`, not nested beneath it, so this
+       * needs its own alias rather than falling under `@/*` (which resolves
+       * against `frontend/`) — mirrors the `@db/*` split in
+       * `backend/tsconfig.json` for the same reason.
+       */
+      "@backend/*": ["../backend/*"]
+    }
+  },
+  "include": [
+    "./**/*.ts",
+    "../constants/testIDs.ts",
+    "../lib/ageGroups.ts",
+    "../../backend/src/data/trek-metadata.ts"
+  ]
+}

@@ -1,0 +1,79 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy to
+        type: choice
+        required: true
+        default: staging
+        options:
+          - staging
+          - production
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-cd-${{ hashFiles('backend/package-lock.json', 'frontend/package-lock.json') }}
+
+      - name: Backend — install, typecheck, test
+        working-directory: backend
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+
+      - name: Frontend — install, typecheck
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run typecheck
+
+  deploy:
+    name: Deploy (${{ github.event.inputs.environment || 'staging' }})
+    needs: test
+    runs-on: ubuntu-latest
+    # Only ever deploys off main — a manual dispatch from a feature branch
+    # still has to land on main first. Environment secrets/protection rules
+    # (required reviewers, wait timers) are configured on the named
+    # `environment` in the repo settings, not in this file.
+    if: github.ref == 'refs/heads/main'
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+    env:
+      DEPLOY_ENV: ${{ github.event.inputs.environment || 'staging' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: docker build -f backend/Dockerfile -t trekeasy-backend:${{ github.sha }} .
+
+      - name: Build frontend image
+        run: |
+          docker build -f frontend/Dockerfile \
+            --build-arg EXPO_PUBLIC_API_URL=${{ vars.EXPO_PUBLIC_API_URL || '/api' }} \
+            -t trekeasy-frontend:${{ github.sha }} frontend
+
+      - name: Deploy
+        run: |
+          echo "Deploying trekeasy-backend:${{ github.sha }} and trekeasy-frontend:${{ github.sha }} to $DEPLOY_ENV"
+          # Placeholder for the real rollout command against this environment,
+          # e.g.:
+          #   kubectl --context $DEPLOY_ENV set image deployment/backend \
+          #     backend=registry.example.com/trekeasy-backend:${{ github.sha }} -n myapp
+          # See k8s/backend-deployment.yaml for the Deployment this would target
+          # and `kubectl rollout undo deployment/backend -n myapp` to revert it.

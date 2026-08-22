@@ -1,0 +1,100 @@
+# `version:` omitted deliberately — the top-level key is obsolete on current
+# Docker Compose (v2) and only produces a warning.
+services:
+  mongo:
+    build:
+      context: ./backend-database
+      dockerfile: Dockerfile
+    container_name: trekeasy-mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_DATABASE: ${MONGO_DB_NAME:-trekeasy}
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\" | grep -q 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - trekeasy-net
+
+  backend:
+    build:
+      # Root context: backend/tsconfig.json compiles backend/ and
+      # backend-database/ together (rootDir: ".."), so the build needs both
+      # directories in scope — see backend/Dockerfile's header comment.
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: trekeasy-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/${MONGO_DB_NAME:-trekeasy}
+      PORT: 3001
+    depends_on:
+      mongo:
+        condition: service_healthy
+    ports:
+      - '3001:3001'
+    volumes:
+      - backend-uploads:/app/backend/uploads
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3001/api/health', r => { let b=''; r.on('data', c => b+=c); r.on('end', () => { try { process.exit(JSON.parse(b).status === 'ok' ? 0 : 1); } catch { process.exit(1); } }); }).on('error', () => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - trekeasy-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Routed through the nginx reverse proxy, not straight at `backend` —
+        # this becomes a browser-facing URL baked into the web bundle.
+        EXPO_PUBLIC_API_URL: ${EXPO_PUBLIC_API_URL:-/api}
+    container_name: trekeasy-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - trekeasy-net
+
+  nginx:
+    image: nginx:alpine
+    container_name: trekeasy-nginx
+    restart: unless-stopped
+    ports:
+      - '80:80'
+    volumes:
+      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./deploy/nginx/404.html:/usr/share/nginx/html/404.html:ro
+      - nginx-logs:/var/log/nginx
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    networks:
+      - trekeasy-net
+
+networks:
+  trekeasy-net:
+    driver: bridge
+
+volumes:
+  mongo-data:
+  backend-uploads:
+  nginx-logs:

@@ -1,0 +1,14 @@
+# Drop-in rewrite rules for the Apache-hosted frontend build (see
+# trekeasy.conf, which sets `AllowOverride All` so this file is honoured).
+
+RewriteEngine On
+
+# Legacy /home links permanently redirect to the app root.
+RewriteRule ^home$ / [R=301,L]
+
+# expo-router client-side routes: serve index.html for any path that isn't a
+# real file or directory in the build output, so a deep link (e.g. /trek/12)
+# is handled by the app's own router instead of a 404 from Apache.
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.html [L]

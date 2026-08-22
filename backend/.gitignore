@@ -1,0 +1,26 @@
+# NestJS API service.
+
+# dependencies
+node_modules/
+
+# build output
+dist/
+*.tsbuildinfo
+
+# env — real secrets. `.env.example` is committed as the template.
+.env
+.env.local
+.env.*.local
+
+# Locally-stored profile picture uploads (development fallback only; in
+# production these live in Cloudinary — see src/common/storage.service.ts).
+uploads/
+
+# logs / coverage
+coverage/
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# os
+.DS_Store

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: myapp
+data:
+  NODE_ENV: 'production'
+  PORT: '3001'
+  # Blank: the browser reaches the API through the Ingress host (same origin),
+  # never cross-origin — see ingress.yaml.
+  CORS_ORIGINS: ''
+  TRUST_PROXY: 'true'
+  # Baked into the frontend's web bundle at image-build time (see
+  # frontend/Dockerfile) — kept here too so the runtime config for the whole
+  # app lives in one place, alongside the backend's.
+  EXPO_PUBLIC_API_URL: 'http://app.local/api'

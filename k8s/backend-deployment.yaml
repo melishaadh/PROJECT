@@ -1,0 +1,62 @@
+# Build the image into Minikube's Docker daemon before applying:
+#   eval $(minikube docker-env)
+#   docker build -f backend/Dockerfile -t trekeasy-backend:latest .
+#
+# Rollouts: a change to this file's `image:` (or any pod-template field)
+# triggers a rolling update automatically under the `RollingUpdate` strategy
+# below. To roll one back:
+#   kubectl rollout status deployment/backend -n myapp
+#   kubectl rollout undo deployment/backend -n myapp
+#   kubectl rollout undo deployment/backend -n myapp --to-revision=<N>   # a specific one
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: myapp
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+        - name: backend
+          image: trekeasy-backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3001
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: db-secret
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3001
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3001
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            failureThreshold: 3

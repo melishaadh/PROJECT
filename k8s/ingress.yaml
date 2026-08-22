@@ -1,0 +1,21 @@
+# Requires the ingress-nginx addon: `minikube addons enable ingress`.
+# Point app.local at the Minikube IP in your hosts file:
+#   echo "$(minikube ip) app.local" | sudo tee -a /etc/hosts
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: backend-ingress
+  namespace: myapp
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: app.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: backend-service
+                port:
+                  number: 3001

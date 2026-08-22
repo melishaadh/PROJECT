@@ -1,4 +1,4 @@
-# Requires the metrics-server addon: `minikube addons enable metrics-server`.
+# Requires: minikube addons enable metrics-server
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

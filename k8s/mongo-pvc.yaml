@@ -4,8 +4,7 @@ metadata:
   name: mongo-pvc
   namespace: myapp
 spec:
-  accessModes:
-    - ReadWriteOnce
+  accessModes: [ReadWriteOnce]
   resources:
     requests:
       storage: 2Gi

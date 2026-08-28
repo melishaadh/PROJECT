@@ -14,9 +14,11 @@ Three independent services:
 Browser / Mobile app
         │
         ▼
-   nginx (:80)  ──────────────►  frontend (Expo web export, :8080)
+  nginx (:80) / Ingress  ─────►  frontend (Expo web export, :8080)
         │
-        └── /api ─────────────►  backend (NestJS, :3001)
+        ├── /api ────────────►  backend (NestJS, :3001)
+        ├── /uploads ────────►  backend   (locally-stored images)
+        └── /socket.io ──────►  backend   (real-time chat WebSocket)
                                        │
                                        ▼
                                   mongo (:27017)
@@ -54,7 +56,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 | `JWT_SECRET`, `JWT_REFRESH_SECRET` | Auth token signing keys — required, 32+ chars |
 | `JWT_EXPIRES_IN`, `JWT_REFRESH_EXPIRES_IN` | Token lifetimes (default `15m` / `30d`) |
 | `PORT` | Backend port (default `3001`) |
-| `CORS_ORIGINS` | Comma-separated allowed origins. Blank when nginx serves both frontend and API from one origin |
+| `CORS_ORIGINS` | Comma-separated allowed origins. Set to the host the browser loads the app from (`http://localhost` for Compose, `http://app.local` for the Ingress) — with `NODE_ENV=production` a blank value blocks all cross-origin calls and the chat socket handshake |
 | `TRUST_PROXY` | `true` when running behind nginx/an ingress, so rate limiting sees the real client IP |
 | `EXPO_PUBLIC_API_URL` | Where the frontend looks for the API. Baked into the frontend build — see [`frontend/lib/apiConfig.ts`](frontend/lib/apiConfig.ts) |
 | `CLOUDINARY_*` | Optional — profile picture storage. Unset falls back to local disk |
@@ -105,7 +107,7 @@ An Apache alternative to nginx is provided at [`deploy/apache/`](deploy/apache) 
 # 1. Build the images into Minikube's own Docker daemon
 eval $(minikube docker-env)
 docker build -f backend/Dockerfile -t trekeasy-backend:latest .
-docker build -f frontend/Dockerfile -t trekeasy-frontend:latest frontend
+docker build -f frontend/Dockerfile --build-arg EXPO_PUBLIC_API_URL=/api -t trekeasy-frontend:latest frontend
 docker build -f backend-database/Dockerfile -t trekeasy-mongo:latest backend-database
 
 # 2. Enable required addons
@@ -114,6 +116,8 @@ minikube addons enable metrics-server
 
 # 3. Apply the manifests
 kubectl apply -f k8s/
+# If you applied an earlier revision, drop the renamed Ingress:
+#   kubectl delete ingress backend-ingress -n myapp --ignore-not-found
 
 # 4. Point app.local at Minikube
 echo "$(minikube ip) app.local" | sudo tee -a /etc/hosts
@@ -129,7 +133,9 @@ Manifests, all under [`k8s/`](k8s):
 |---|---|
 | `namespace.yaml` | the `myapp` namespace |
 | `app-config.yaml`, `db-secret.yaml` | non-secret / secret env vars for the backend |
-| `backend-deployment.yaml`, `backend-service.yaml`, `ingress.yaml` | the API, exposed via NodePort and Ingress |
+| `backend-deployment.yaml`, `backend-service.yaml` | the API (NodePort `30081` for direct access) |
+| `frontend-deployment.yaml`, `frontend-service.yaml` | the Expo web bundle (ClusterIP, reached only via the Ingress) |
+| `ingress.yaml` | `trekeasy-ingress` — single front door on `app.local`, routes `/api` + `/uploads` + `/socket.io` to the backend and `/` to the frontend |
 | `mongo-pvc.yaml`, `mongo-deployment.yaml`, `mongo-service.yaml` | MongoDB with persistent storage |
 | `backend-hpa.yaml` | autoscales the backend 2→6 pods on CPU |
 

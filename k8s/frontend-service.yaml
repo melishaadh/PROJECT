@@ -1,0 +1,14 @@
+# ClusterIP: the frontend is only reached through the Ingress (the app's single
+# front door). Unlike backend-service there is no NodePort — browsers hit
+# http://app.local/ and the Ingress forwards "/" here.
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: myapp
+spec:
+  selector:
+    app: frontend
+  ports:
+    - port: 8080
+      targetPort: 8080

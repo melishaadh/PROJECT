@@ -1,20 +1,56 @@
 # Requires: minikube addons enable ingress
 # Then:     echo "$(minikube ip) app.local" | sudo tee -a /etc/hosts
+#
+# Single front door for the whole stack. Routing mirrors the docker-compose
+# reverse proxy (deploy/nginx/nginx.conf) so behaviour is identical in both:
+#
+#   /socket.io -> backend   real-time chat handshake + WebSocket (origin root)
+#   /uploads   -> backend   locally-stored images, served outside the /api prefix
+#   /api       -> backend   REST API
+#   /          -> frontend  Expo web static bundle
+#
+# Because everything is served from the one host (app.local), the browser's API
+# and socket calls are same-origin — no CORS preflight, no mixed hosts.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: backend-ingress
+  name: trekeasy-ingress
   namespace: myapp
+  annotations:
+    # Keep long-lived chat WebSockets from being culled mid-connection.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: '3600'
+    nginx.ingress.kubernetes.io/proxy-send-timeout: '3600'
 spec:
   ingressClassName: nginx
   rules:
     - host: app.local
       http:
         paths:
-          - path: /
+          - path: /socket.io
             pathType: Prefix
             backend:
               service:
                 name: backend-service
                 port:
                   number: 3001
+          - path: /uploads
+            pathType: Prefix
+            backend:
+              service:
+                name: backend-service
+                port:
+                  number: 3001
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend-service
+                port:
+                  number: 3001
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-service
+                port:
+                  number: 8080

@@ -6,6 +6,12 @@ metadata:
 data:
   NODE_ENV: 'production'
   PORT: '3001'
-  CORS_ORIGINS: ''
+  # The host the Ingress serves on. Locks both the HTTP CORS allow-list
+  # (main.ts) and the socket.io CORS policy (chat.gateway.ts) to this origin;
+  # without it, NODE_ENV=production refuses every cross-origin call and the
+  # chat socket handshake fails.
+  CORS_ORIGINS: 'http://app.local'
   TRUST_PROXY: 'true'
-  EXPO_PUBLIC_API_URL: 'http://app.local/api'
+  # EXPO_PUBLIC_API_URL is intentionally NOT here: it is a frontend build-time
+  # value baked into the JS bundle, not a backend runtime var. See the build
+  # command in k8s/frontend-deployment.yaml.

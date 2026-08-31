@@ -108,7 +108,7 @@ An Apache alternative to nginx is provided at [`deploy/apache/`](deploy/apache) 
 eval $(minikube docker-env)
 docker build -f backend/Dockerfile -t trekeasy-backend:latest .
 docker build -f frontend/Dockerfile --build-arg EXPO_PUBLIC_API_URL=/api -t trekeasy-frontend:latest frontend
-docker build -f backend-database/Dockerfile -t trekeasy-mongo:latest backend-database
+docker build -f backend-database/Dockerfile -t trekeasy-database:latest backend-database
 
 # 2. Enable required addons
 minikube addons enable ingress
@@ -149,12 +149,34 @@ kubectl rollout undo deployment/backend -n myapp   # revert if something's wrong
 
 ---
 
+## AWS ECS on Fargate
+
+Production target. Three CloudFormation stacks (network → platform → services)
+put the tasks in private subnets behind an internet-facing ALB, with MongoDB on
+an EFS volume and JWT keys in Secrets Manager. `launchType: FARGATE` throughout.
+
+```bash
+export AWS_REGION=us-east-1
+export JWT_SECRET=$(openssl rand -hex 32)
+export JWT_REFRESH_SECRET=$(openssl rand -hex 32)
+
+./aws/scripts/provision.sh                               # VPC, ALB, ECR, EFS, IAM
+./aws/scripts/build-and-push.sh                          # 3 images -> ECR
+./aws/scripts/provision.sh $(git rev-parse --short HEAD) # ECS cluster + services
+```
+
+Full walkthrough incl. the manual IAM/console steps: [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
+Architecture and DevOps concepts explained: [`docs/DEVOPS_OVERVIEW.md`](docs/DEVOPS_OVERVIEW.md).
+`aws/` layout and commands: [`aws/README.md`](aws/README.md).
+
+---
+
 ## CI/CD
 
 - **`.github/workflows/ci.yml`** — runs on every push and on PRs into `main`: lint, typecheck, test, build, for both services across Node 18 and 20, with build artifacts uploaded.
-- **`.github/workflows/cd.yml`** — runs on push to `main` (or manually via *Run workflow* with a `staging`/`production` choice): re-runs tests, builds both Docker images, deploys, then posts a success/failure message to **#trekeasy** in Slack.
+- **`.github/workflows/cd.yml`** — runs on push to `main` (or manually via *Run workflow* with a `staging`/`production` choice): re-runs tests, then builds the three images, pushes them to **ECR**, and rolls the ECS Fargate services onto the new tag (`aws/scripts/build-and-push.sh` + `deploy.sh`), then posts a success/failure message to **#trekeasy** in Slack.
 
-  To enable the Slack step, add a repository secret named `SLACK_WEBHOOK_URL` (**Settings → Secrets and variables → Actions → New repository secret**) with your [Slack Incoming Webhook](https://api.slack.com/messaging/webhooks) URL. The workflow never contains the URL itself.
+  Required repo config (**Settings → Secrets and variables → Actions**): secrets `AWS_DEPLOY_ROLE_ARN` (an IAM role trusted via GitHub OIDC — see `docs/RUNBOOK.md` §4.4) and `SLACK_WEBHOOK_URL`; variable `AWS_REGION`. No AWS keys are stored.
 
 - **`Jenkinsfile`** — an equivalent pipeline (`Checkout` → `Build` → `Test` → `Archive`) for a Jenkins-hosted setup, with a Node 20 tool named `node20` expected to be configured in Jenkins.
 
@@ -167,7 +189,9 @@ frontend/            Expo app — screens/, components/, lib/, context/
 backend/              NestJS API — src/modules/{auth,users,destinations,chat,...}
 backend-database/     Mongoose schemas + config, imported by backend/ via @db/*
 deploy/               nginx.conf, Apache vhost + .htaccess
-k8s/                  Kubernetes manifests
+k8s/                  Kubernetes manifests (Minikube)
+aws/                  ECS on Fargate — CloudFormation, task definitions, scripts
+docs/                 DEVOPS_OVERVIEW.md, RUNBOOK.md
 .github/workflows/    CI and CD
 Jenkinsfile
 docker-compose.yml

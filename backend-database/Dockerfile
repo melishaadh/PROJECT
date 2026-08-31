@@ -1,6 +1,6 @@
 # MongoDB — the runtime service backing backend-database/ (its schemas
 # compile into the backend image; this is what actually runs as data storage).
-#   docker build -f backend-database/Dockerfile -t trekeasy-mongo backend-database
+#   docker build -f backend-database/Dockerfile -t trekeasy-database backend-database
 
 FROM mongo:7-jammy
 COPY init-indexes.js /docker-entrypoint-initdb.d/init-indexes.js

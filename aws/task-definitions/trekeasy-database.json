@@ -1,0 +1,44 @@
+{
+  "//": "Standalone copy of the database task definition (source of truth: aws/cloudformation/03-services.yaml). Register with: aws ecs register-task-definition --cli-input-json file://aws/task-definitions/trekeasy-database.json",
+  "family": "trekeasy-database",
+  "requiresCompatibilities": ["FARGATE"],
+  "networkMode": "awsvpc",
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::<ACCOUNT_ID>:role/trekeasy-ecs-execution",
+  "taskRoleArn": "arn:aws:iam::<ACCOUNT_ID>:role/trekeasy-ecs-task",
+  "volumes": [
+    {
+      "name": "mongo-data",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "<EFS_FILE_SYSTEM_ID>",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": { "accessPointId": "<MONGO_ACCESS_POINT_ID>", "iam": "DISABLED" }
+      }
+    }
+  ],
+  "containerDefinitions": [
+    {
+      "name": "trekeasy-database",
+      "image": "<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/trekeasy-database:<IMAGE_TAG>",
+      "essential": true,
+      "portMappings": [{ "containerPort": 27017, "protocol": "tcp" }],
+      "environment": [
+        { "name": "MONGO_INITDB_DATABASE", "value": "trekeasy" }
+      ],
+      "mountPoints": [{ "sourceVolume": "mongo-data", "containerPath": "/data/db" }],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\" | grep -q 1 || exit 1"],
+        "interval": 15, "timeout": 5, "retries": 5, "startPeriod": 30
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/trekeasy-database",
+          "awslogs-region": "<REGION>",
+          "awslogs-stream-prefix": "database"
+        }
+      }
+    }
+  ]
+}

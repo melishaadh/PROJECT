@@ -396,7 +396,7 @@ export class PersonalizationService {
     stages: RouteStage[],
     origin: string,
     finalDest: string,
-    baseDifficulty: number,
+    _baseDifficulty: number,
   ): RouteSegment[] {
     const route: RouteSegment[] = [];
     const firstStage = stages[0];
@@ -453,7 +453,7 @@ export class PersonalizationService {
   // ── Convert route segments to activity blocks ──────────────────────────
   private segmentsToActivities(
     route: RouteSegment[],
-    profile: CapabilityProfile,
+    _profile: CapabilityProfile,
   ): ActivityDetail[] {
     const activities: ActivityDetail[] = [];
 
@@ -689,8 +689,8 @@ export class PersonalizationService {
     nextDay: ItineraryDay | null,
     currentAltitude: number,
     profile: CapabilityProfile,
-    baseDifficulty: number,
-    dayIndex: number,
+    _baseDifficulty: number,
+    _dayIndex: number,
   ): BreakSuggestion[] {
     const breaks: BreakSuggestion[] = [];
 
@@ -814,7 +814,7 @@ export class PersonalizationService {
     days: ItineraryDay[],
     br: BreakSuggestion,
     profile: CapabilityProfile,
-    altitude: number,
+    _altitude: number,
   ): number | null {
     if (days.length === 0) return null;
 

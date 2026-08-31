@@ -1,0 +1,390 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  TrekEasy - Stack 2/3: Platform. Everything the services need but that is not
+  a service itself: ECR repositories, CloudWatch log groups, IAM roles,
+  security groups, an internet-facing ALB, an EFS file system for MongoDB data
+  + backend uploads, a Cloud Map private DNS namespace, and the Secrets
+  Manager secret holding the JWT signing keys.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: trekeasy
+  JwtSecret:
+    Type: String
+    NoEcho: true
+    Description: 64-hex-char access-token signing key. Generate with `openssl rand -hex 32`.
+  JwtRefreshSecret:
+    Type: String
+    NoEcho: true
+    Description: 64-hex-char refresh-token signing key. Generate with `openssl rand -hex 32`.
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # Container registries (one per image). Names match the standardized image
+  # names used everywhere else: trekeasy-backend / -frontend / -database.
+  # ---------------------------------------------------------------------------
+  BackendRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${ProjectName}-backend"
+      ImageScanningConfiguration: { ScanOnPush: true }
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          { "rules": [ { "rulePriority": 1, "description": "keep last 10",
+            "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 10 },
+            "action": { "type": "expire" } } ] }
+  FrontendRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${ProjectName}-frontend"
+      ImageScanningConfiguration: { ScanOnPush: true }
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          { "rules": [ { "rulePriority": 1, "description": "keep last 10",
+            "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 10 },
+            "action": { "type": "expire" } } ] }
+  DatabaseRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${ProjectName}-database"
+      ImageScanningConfiguration: { ScanOnPush: true }
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          { "rules": [ { "rulePriority": 1, "description": "keep last 10",
+            "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 10 },
+            "action": { "type": "expire" } } ] }
+
+  # ---------------------------------------------------------------------------
+  # Log groups (one per container). 14-day retention.
+  # ---------------------------------------------------------------------------
+  BackendLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: !Sub "/ecs/${ProjectName}-backend", RetentionInDays: 14 }
+  FrontendLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: !Sub "/ecs/${ProjectName}-frontend", RetentionInDays: 14 }
+  DatabaseLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: { LogGroupName: !Sub "/ecs/${ProjectName}-database", RetentionInDays: 14 }
+
+  # ---------------------------------------------------------------------------
+  # Secrets. The task definition injects these into the backend container as
+  # env vars via `secrets:` (never baked into an image or a task def).
+  # ---------------------------------------------------------------------------
+  JwtSecrets:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${ProjectName}/jwt"
+      Description: TrekEasy JWT signing keys, consumed by the backend task.
+      SecretString: !Sub '{"JWT_SECRET":"${JwtSecret}","JWT_REFRESH_SECRET":"${JwtRefreshSecret}"}'
+
+  # ---------------------------------------------------------------------------
+  # IAM roles.
+  #   ExecutionRole - used by the ECS agent to pull images, read secrets,
+  #                   write logs. Same role for all three tasks.
+  #   TaskRole      - assumed by the application code inside the container.
+  #                   TrekEasy's code calls no AWS APIs, so it stays empty
+  #                   (add S3/SES/etc. permissions here if that changes).
+  # ---------------------------------------------------------------------------
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-ecs-execution"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: read-jwt-secret
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref JwtSecrets
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-ecs-task"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+
+  # ---------------------------------------------------------------------------
+  # Security groups. Traffic path:
+  #   internet -> AlbSg:80 -> {FrontendSg:8080, BackendSg:3001}
+  #   BackendSg -> DatabaseSg:27017
+  #   DatabaseSg + BackendSg -> EfsSg:2049
+  # ---------------------------------------------------------------------------
+  AlbSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: TrekEasy ALB - public HTTP(S) ingress
+      VpcId: { "Fn::ImportValue": !Sub "${ProjectName}-VpcId" }
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80,  ToPort: 80,  CidrIp: 0.0.0.0/0, Description: HTTP }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: HTTPS }
+      Tags: [{ Key: Name, Value: !Sub "${ProjectName}-alb-sg" }]
+
+  BackendSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: TrekEasy backend tasks - 3001 from the ALB only
+      VpcId: { "Fn::ImportValue": !Sub "${ProjectName}-VpcId" }
+      Tags: [{ Key: Name, Value: !Sub "${ProjectName}-backend-sg" }]
+  BackendSgFromAlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref BackendSg
+      IpProtocol: tcp
+      FromPort: 3001
+      ToPort: 3001
+      SourceSecurityGroupId: !Ref AlbSg
+      Description: NestJS API from ALB
+
+  FrontendSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: TrekEasy frontend tasks - 8080 from the ALB only
+      VpcId: { "Fn::ImportValue": !Sub "${ProjectName}-VpcId" }
+      Tags: [{ Key: Name, Value: !Sub "${ProjectName}-frontend-sg" }]
+  FrontendSgFromAlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref FrontendSg
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId: !Ref AlbSg
+      Description: Expo web static bundle from ALB
+
+  DatabaseSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: TrekEasy MongoDB task - 27017 from the backend only
+      VpcId: { "Fn::ImportValue": !Sub "${ProjectName}-VpcId" }
+      Tags: [{ Key: Name, Value: !Sub "${ProjectName}-database-sg" }]
+  DatabaseSgFromBackend:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DatabaseSg
+      IpProtocol: tcp
+      FromPort: 27017
+      ToPort: 27017
+      SourceSecurityGroupId: !Ref BackendSg
+      Description: MongoDB wire protocol from the backend
+
+  EfsSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: TrekEasy EFS - NFS 2049 from backend + database tasks
+      VpcId: { "Fn::ImportValue": !Sub "${ProjectName}-VpcId" }
+      Tags: [{ Key: Name, Value: !Sub "${ProjectName}-efs-sg" }]
+  EfsSgFromDatabase:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EfsSg
+      IpProtocol: tcp
+      FromPort: 2049
+      ToPort: 2049
+      SourceSecurityGroupId: !Ref DatabaseSg
+  EfsSgFromBackend:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EfsSg
+      IpProtocol: tcp
+      FromPort: 2049
+      ToPort: 2049
+      SourceSecurityGroupId: !Ref BackendSg
+
+  # ---------------------------------------------------------------------------
+  # EFS: durable storage that survives task replacement.
+  #   /  (access point "mongo")   -> MongoDB  /data/db
+  #   /  (access point "uploads") -> backend  /app/backend/uploads
+  # ---------------------------------------------------------------------------
+  FileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+      FileSystemTags: [{ Key: Name, Value: !Sub "${ProjectName}-efs" }]
+
+  MountTargetA:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !Select [0, !Split [",", { "Fn::ImportValue": !Sub "${ProjectName}-PrivateSubnets" }]]
+      SecurityGroups: [!Ref EfsSg]
+  MountTargetB:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !Select [1, !Split [",", { "Fn::ImportValue": !Sub "${ProjectName}-PrivateSubnets" }]]
+      SecurityGroups: [!Ref EfsSg]
+
+  MongoAccessPoint:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      FileSystemId: !Ref FileSystem
+      PosixUser: { Uid: "999", Gid: "999" }
+      RootDirectory:
+        Path: /mongo
+        CreationInfo: { OwnerUid: "999", OwnerGid: "999", Permissions: "0755" }
+      AccessPointTags: [{ Key: Name, Value: !Sub "${ProjectName}-ap-mongo" }]
+
+  UploadsAccessPoint:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      FileSystemId: !Ref FileSystem
+      PosixUser: { Uid: "1000", Gid: "1000" }
+      RootDirectory:
+        Path: /uploads
+        CreationInfo: { OwnerUid: "1000", OwnerGid: "1000", Permissions: "0755" }
+      AccessPointTags: [{ Key: Name, Value: !Sub "${ProjectName}-ap-uploads" }]
+
+  # ---------------------------------------------------------------------------
+  # Cloud Map: private DNS so the backend can dial the database by a stable
+  # name -> mongodb://mongo.trekeasy.local:27017/trekeasy
+  # ---------------------------------------------------------------------------
+  ServiceNamespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+      Name: !Sub "${ProjectName}.local"
+      Vpc: { "Fn::ImportValue": !Sub "${ProjectName}-VpcId" }
+
+  MongoDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: mongo
+      NamespaceId: !Ref ServiceNamespace
+      DnsConfig:
+        NamespaceId: !Ref ServiceNamespace
+        DnsRecords: [{ Type: A, TTL: 10 }]
+        RoutingPolicy: MULTIVALUE
+      HealthCheckCustomConfig: { FailureThreshold: 1 }
+
+  # ---------------------------------------------------------------------------
+  # Application Load Balancer. One listener on :80.
+  #   default            -> frontend target group (Expo web bundle)
+  #   /api/*             -> backend target group
+  #   /uploads/*         -> backend target group
+  #   /socket.io/*       -> backend target group  (sticky, long idle timeout)
+  # This is the exact routing from deploy/nginx/nginx.conf and k8s/ingress.yaml,
+  # so the frontend bundle's baked-in `/api` base URL works unchanged.
+  # ---------------------------------------------------------------------------
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${ProjectName}-alb"
+      Type: application
+      Scheme: internet-facing
+      SecurityGroups: [!Ref AlbSg]
+      Subnets: !Split [",", { "Fn::ImportValue": !Sub "${ProjectName}-PublicSubnets" }]
+      LoadBalancerAttributes:
+        - { Key: idle_timeout.timeout_seconds, Value: "300" }
+
+  FrontendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-frontend-tg"
+      VpcId: { "Fn::ImportValue": !Sub "${ProjectName}-VpcId" }
+      Port: 8080
+      Protocol: HTTP
+      TargetType: ip
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      Matcher: { HttpCode: "200" }
+
+  BackendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-backend-tg"
+      VpcId: { "Fn::ImportValue": !Sub "${ProjectName}-VpcId" }
+      Port: 3001
+      Protocol: HTTP
+      TargetType: ip
+      HealthCheckPath: /api/health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      Matcher: { HttpCode: "200" }
+      TargetGroupAttributes:
+        - { Key: stickiness.enabled, Value: "true" }
+        - { Key: stickiness.type, Value: lb_cookie }
+        - { Key: stickiness.lb_cookie.duration_seconds, Value: "3600" }
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref FrontendTargetGroup
+
+  ApiRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref HttpListener
+      Priority: 10
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig: { Values: ["/api/*", "/uploads/*", "/socket.io/*"] }
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref BackendTargetGroup
+
+Outputs:
+  ClusterExecutionRoleArn:
+    Value: !GetAtt ExecutionRole.Arn
+    Export: { Name: !Sub "${ProjectName}-ExecutionRoleArn" }
+  TaskRoleArn:
+    Value: !GetAtt TaskRole.Arn
+    Export: { Name: !Sub "${ProjectName}-TaskRoleArn" }
+  BackendSgId:
+    Value: !Ref BackendSg
+    Export: { Name: !Sub "${ProjectName}-BackendSgId" }
+  FrontendSgId:
+    Value: !Ref FrontendSg
+    Export: { Name: !Sub "${ProjectName}-FrontendSgId" }
+  DatabaseSgId:
+    Value: !Ref DatabaseSg
+    Export: { Name: !Sub "${ProjectName}-DatabaseSgId" }
+  BackendTargetGroupArn:
+    Value: !Ref BackendTargetGroup
+    Export: { Name: !Sub "${ProjectName}-BackendTargetGroupArn" }
+  FrontendTargetGroupArn:
+    Value: !Ref FrontendTargetGroup
+    Export: { Name: !Sub "${ProjectName}-FrontendTargetGroupArn" }
+  MongoDiscoveryArn:
+    Value: !GetAtt MongoDiscovery.Arn
+    Export: { Name: !Sub "${ProjectName}-MongoDiscoveryArn" }
+  FileSystemId:
+    Value: !Ref FileSystem
+    Export: { Name: !Sub "${ProjectName}-FileSystemId" }
+  MongoAccessPointId:
+    Value: !Ref MongoAccessPoint
+    Export: { Name: !Sub "${ProjectName}-MongoAccessPointId" }
+  UploadsAccessPointId:
+    Value: !Ref UploadsAccessPoint
+    Export: { Name: !Sub "${ProjectName}-UploadsAccessPointId" }
+  JwtSecretArn:
+    Value: !Ref JwtSecrets
+    Export: { Name: !Sub "${ProjectName}-JwtSecretArn" }
+  AlbDnsName:
+    Value: !GetAtt LoadBalancer.DNSName
+    Export: { Name: !Sub "${ProjectName}-AlbDnsName" }
+  AppUrl:
+    Description: Open this in a browser once the services are running.
+    Value: !Sub "http://${LoadBalancer.DNSName}"

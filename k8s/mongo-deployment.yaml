@@ -1,5 +1,8 @@
 # Build the image first: eval $(minikube docker-env) &&
-#   docker build -f backend-database/Dockerfile -t trekeasy-mongo:latest backend-database
+#   docker build -f backend-database/Dockerfile -t trekeasy-database:latest backend-database
+#
+# The Deployment/pod label and Service stay named "mongo" — that hostname is
+# baked into MONGODB_URI (k8s/db-secret.yaml). Only the image name changed.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,7 +22,7 @@ spec:
     spec:
       containers:
         - name: mongo
-          image: trekeasy-mongo:latest
+          image: trekeasy-database:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 27017

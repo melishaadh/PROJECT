@@ -1,0 +1,983 @@
+<!doctype html><html><head><meta charset='utf-8'><style>
+@page { size: A4; margin: 22mm 18mm 20mm 18mm; }
+* { box-sizing: border-box; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; font-size: 10.5pt;
+       line-height: 1.5; color: #1a1a1a; }
+h1 { font-size: 21pt; color: #0b5394; border-bottom: 3px solid #1b6ec2;
+     padding-bottom: 4px; margin: 26pt 0 12pt; page-break-after: avoid; }
+h2 { font-size: 15pt; color: #14477d; border-bottom: 1px solid #cfd8e3;
+     padding-bottom: 3px; margin: 20pt 0 8pt; page-break-after: avoid; }
+h3 { font-size: 12pt; color: #14477d; margin: 14pt 0 6pt; page-break-after: avoid; }
+h4 { font-size: 10.5pt; color: #333; margin: 10pt 0 4pt; }
+p, li { orphans: 3; widows: 3; }
+code { font-family: 'Cascadia Mono', Consolas, monospace; font-size: 9pt;
+       background: #f2f4f7; padding: 1px 4px; border-radius: 3px; }
+pre { background: #f6f8fa; border: 1px solid #d7dde3; border-radius: 5px;
+      padding: 9px 11px; overflow-x: auto; page-break-inside: avoid; }
+pre code { background: none; padding: 0; font-size: 8.6pt; line-height: 1.45; }
+table { border-collapse: collapse; width: 100%; margin: 8pt 0; font-size: 9pt;
+        page-break-inside: avoid; }
+th, td { border: 1px solid #c4ccd6; padding: 4px 7px; text-align: left;
+         vertical-align: top; }
+th { background: #eaf1f8; font-weight: 600; }
+tr:nth-child(even) td { background: #f7f9fb; }
+blockquote { border-left: 3px solid #1b6ec2; margin: 8pt 0; padding: 2pt 12pt;
+             color: #444; background: #f4f8fc; }
+a { color: #1b6ec2; text-decoration: none; }
+hr { border: none; border-top: 1px solid #d0d7de; margin: 16pt 0; }
+.title-page { text-align: center; padding-top: 32%; page-break-after: always; }
+.title-page .t { font-size: 30pt; font-weight: 700; color: #14477d; }
+.title-page .s { font-size: 13pt; color: #555; margin-top: 10pt; }
+.title-page .m { font-size: 10pt; color: #888; margin-top: 40pt; }
+h1 { color: #0b5394; }
+</style></head><body><div class="title-page"><div class="t">TrekEasy</div><div class="s">DevOps &amp; AWS ECS on Fargate — Complete Documentation</div><div class="m">Project &amp; DevOps Overview &nbsp;•&nbsp; Manual Runbook</div></div><h1>Part 1 — Project &amp; DevOps Overview</h1><h1 id="trekeasy-project-devops-overview">TrekEasy — Project &amp; DevOps Overview</h1>
+<p>A plain-English tour of how TrekEasy is built, containerized, tested, and
+deployed. No prior DevOps knowledge assumed. If you just want the commands,
+skip to <a href="RUNBOOK.md"><code>RUNBOOK.md</code></a>.</p>
+<hr />
+<h2 id="1-what-the-application-is">1. What the application is</h2>
+<p>TrekEasy is a trek-discovery app for the Himalayas: personalized
+recommendations, trending treks, and a group chat per expedition. It is a
+<strong>3-tier application</strong>:</p>
+<pre><code>        ┌─────────────────────────────────────────────┐
+        │  TIER 1 — Frontend                           │
+        │  Expo / React Native app (phone + web).      │
+        │  The web build is plain static files         │
+        │  (HTML/JS/CSS) served by a tiny web server.   │
+        └───────────────────────┬─────────────────────┘
+                                │ HTTPS / WebSocket
+        ┌───────────────────────▼─────────────────────┐
+        │  TIER 2 — Backend                           │
+        │  NestJS (Node.js). REST API under /api plus  │
+        │  a real-time chat socket. Contains all the   │
+        │  business logic.                            │
+        └───────────────────────┬─────────────────────┘
+                                │ MongoDB wire protocol
+        ┌───────────────────────▼─────────────────────┐
+        │  TIER 3 — Database                          │
+        │  MongoDB. Stores users, treks, chat         │
+        │  messages, likes.                          │
+        └─────────────────────────────────────────────┘
+</code></pre>
+<p>"3-tier" simply means the <strong>presentation</strong> (frontend), the <strong>logic</strong>
+(backend), and the <strong>data</strong> (database) are three separate programs that can be
+scaled, deployed, and reasoned about independently.</p>
+<h3 id="repository-layout">Repository layout</h3>
+<table>
+<thead>
+<tr>
+<th>Folder</th>
+<th>Tier</th>
+<th>What it holds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="../frontend"><code>frontend/</code></a></td>
+<td>1</td>
+<td>Expo app — <code>app/</code> (screens), <code>components/</code>, <code>lib/</code> (API client), <code>context/</code></td>
+</tr>
+<tr>
+<td><a href="../backend"><code>backend/</code></a></td>
+<td>2</td>
+<td>NestJS API — <code>src/modules/{auth,users,destinations,chat,recommendations,itinerary,health}</code></td>
+</tr>
+<tr>
+<td><a href="../backend-database"><code>backend-database/</code></a></td>
+<td>2↔3</td>
+<td>Mongoose <strong>schemas</strong> + DB/JWT config. Not a running server — it compiles <em>into</em> the backend image. MongoDB is the actual tier-3 service.</td>
+</tr>
+<tr>
+<td><a href="../deploy"><code>deploy/</code></a></td>
+<td>—</td>
+<td><code>nginx/</code> reverse-proxy config, <code>apache/</code> alternative</td>
+</tr>
+<tr>
+<td><a href="../k8s"><code>k8s/</code></a></td>
+<td>—</td>
+<td>Kubernetes manifests (Minikube)</td>
+</tr>
+<tr>
+<td><a href="../aws"><code>aws/</code></a></td>
+<td>—</td>
+<td><strong>ECS on Fargate</strong> — CloudFormation + task definitions + scripts</td>
+</tr>
+<tr>
+<td><a href="../.github/workflows"><code>.github/workflows/</code></a></td>
+<td>—</td>
+<td>GitHub Actions CI and CD</td>
+</tr>
+<tr>
+<td><a href="../Jenkinsfile"><code>Jenkinsfile</code></a></td>
+<td>—</td>
+<td>Equivalent pipeline for a Jenkins server</td>
+</tr>
+<tr>
+<td><a href="../docker-compose.yml"><code>docker-compose.yml</code></a></td>
+<td>—</td>
+<td>Run all four containers locally with one command</td>
+</tr>
+</tbody>
+</table>
+<h3 id="how-the-frontend-finds-the-backend">How the frontend finds the backend</h3>
+<p>The frontend is compiled with <code>EXPO_PUBLIC_API_URL=/api</code> <strong>baked in</strong> — a
+<em>relative</em> path. When the browser loads the app from <code>http://some-host/</code>, it
+resolves API calls against <strong>that same host</strong> (<code>http://some-host/api/...</code>).
+That is why every deployment (nginx, Kubernetes Ingress, AWS ALB) puts the
+frontend and backend behind <strong>one hostname</strong> and routes by path. Same origin =
+no CORS headaches, and the same image works in every environment.</p>
+<h3 id="standardized-names">Standardized names</h3>
+<p>One naming scheme everywhere — Compose, Kubernetes, and AWS:</p>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>Image</th>
+<th>Container / task</th>
+<th>Network name</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>frontend</td>
+<td><code>trekeasy-frontend</code></td>
+<td><code>trekeasy-frontend</code></td>
+<td><code>frontend</code></td>
+</tr>
+<tr>
+<td>backend</td>
+<td><code>trekeasy-backend</code></td>
+<td><code>trekeasy-backend</code></td>
+<td><code>backend</code></td>
+</tr>
+<tr>
+<td>database</td>
+<td><code>trekeasy-database</code></td>
+<td><code>trekeasy-database</code></td>
+<td><code>mongo</code></td>
+</tr>
+</tbody>
+</table>
+<p>The database's <em>network name</em> stays <code>mongo</code> on purpose — it is hard-coded into
+the connection string <code>mongodb://mongo:27017/trekeasy</code> in several places
+(Compose, <code>k8s/db-secret.yaml</code>, AWS Cloud Map). Renaming a load-bearing
+hostname buys nothing; the <strong>image</strong> and <strong>container</strong> names carry the brand.</p>
+<hr />
+<h2 id="2-docker-dockerfiles">2. Docker &amp; Dockerfiles</h2>
+<h3 id="what-a-container-is">What a container is</h3>
+<p>A <strong>container</strong> is your app plus exactly the runtime and libraries it needs,
+packaged into a single read-only bundle called an <strong>image</strong>. The same image
+runs identically on your laptop, in CI, and on AWS — "works on my machine"
+stops being a problem. A <strong>Dockerfile</strong> is the recipe for building an image.</p>
+<h3 id="the-four-images">The four images</h3>
+<table>
+<thead>
+<tr>
+<th>Dockerfile</th>
+<th>Base image</th>
+<th>Build strategy</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="../backend/Dockerfile"><code>backend/Dockerfile</code></a></td>
+<td><code>node:20-alpine</code></td>
+<td><strong>multi-stage</strong>: stage 1 installs <em>all</em> deps and compiles TypeScript → JS; stage 2 keeps only production deps + the compiled <code>dist/</code>. Smaller, fewer CVEs.</td>
+</tr>
+<tr>
+<td><a href="../frontend/Dockerfile"><code>frontend/Dockerfile</code></a></td>
+<td><code>node:20-alpine</code> → <code>nginx:alpine</code></td>
+<td>stage 1 runs <code>expo export</code> to produce static web files; stage 2 is just nginx serving that folder on port 8080.</td>
+</tr>
+<tr>
+<td><a href="../backend-database/Dockerfile"><code>backend-database/Dockerfile</code></a></td>
+<td><code>mongo:7-jammy</code></td>
+<td>official MongoDB + our <code>init-indexes.js</code> bootstrap script.</td>
+</tr>
+<tr>
+<td><code>deploy/nginx</code> (compose only)</td>
+<td><code>nginx:alpine</code></td>
+<td>the reverse proxy, config bind-mounted.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="key-ideas-used-here">Key ideas used here</h3>
+<ul>
+<li><strong>Multi-stage builds</strong> — the compiler and dev dependencies never reach the
+  final image.</li>
+<li><strong>Build context is the repo root for the backend</strong> — because
+  <code>backend/tsconfig.json</code> compiles <code>backend/</code> and <code>backend-database/</code> together.
+  That is why the compose file and every build command say
+  <code>docker build -f backend/Dockerfile .</code> (the <code>.</code> is the repo root).</li>
+<li><strong>Build-time vs run-time config.</strong> <code>EXPO_PUBLIC_API_URL</code> is a <strong>build arg</strong>
+  (<code>--build-arg</code>) because Expo inlines it into the JS bundle when it exports.
+  Everything the <em>backend</em> needs (<code>MONGODB_URI</code>, <code>JWT_SECRET</code>, …) is a
+  <strong>runtime env var</strong>, injected when the container starts.</li>
+<li><strong><code>HEALTHCHECK</code></strong> — every image knows how to answer "are you actually
+  working?" (<code>GET /api/health</code> for the backend, <code>GET /</code> for the frontend,
+  <code>db.adminCommand('ping')</code> for Mongo). Compose, Kubernetes, and ECS all use
+  these to decide when a container is ready for traffic.</li>
+<li><strong><code>.dockerignore</code></strong> — keeps <code>node_modules</code>, <code>.env</code>, and build output out of
+  the build context so images are small and never bake in a secret.</li>
+</ul>
+<hr />
+<h2 id="3-nginx-the-reverse-proxy">3. NGINX — the reverse proxy</h2>
+<h3 id="what-reverse-proxy-means">What "reverse proxy" means</h3>
+<p>A normal proxy sits in front of <em>clients</em>. A <strong>reverse proxy</strong> sits in front of
+<em>servers</em>: the outside world talks only to nginx, and nginx decides which
+internal service should handle each request. Benefits:</p>
+<ul>
+<li><strong>One public entry point</strong> (one hostname, one port, one TLS certificate).</li>
+<li><strong>Path-based routing</strong> — <code>/api</code> → backend, everything else → frontend.</li>
+<li><strong>The browser sees a single origin</strong>, so no cross-origin (CORS) problems and
+  cookies "just work".</li>
+<li>A natural place to add caching, rate limiting, gzip, and access logs later.</li>
+</ul>
+<h3 id="trekeasys-routing-deploynginxnginxconf">TrekEasy's routing (<a href="../deploy/nginx/nginx.conf"><code>deploy/nginx/nginx.conf</code></a>)</h3>
+<table>
+<thead>
+<tr>
+<th>Request path</th>
+<th>Sent to</th>
+<th>Why it is separate</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/api/…</code></td>
+<td><code>backend:3001</code></td>
+<td>the REST API</td>
+</tr>
+<tr>
+<td><code>/socket.io/…</code></td>
+<td><code>backend:3001</code></td>
+<td>real-time chat; needs the WebSocket <code>Upgrade</code> headers and a long read timeout</td>
+</tr>
+<tr>
+<td><code>/uploads/…</code></td>
+<td><code>backend:3001</code></td>
+<td>locally-stored images, served <em>outside</em> the <code>/api</code> prefix</td>
+</tr>
+<tr>
+<td><code>/</code> (everything else)</td>
+<td><code>frontend:8080</code></td>
+<td>the Expo web bundle</td>
+</tr>
+</tbody>
+</table>
+<p><strong>The exact same four rules appear in <code>k8s/ingress.yaml</code> and in the AWS ALB
+listener rules</strong> (<code>aws/cloudformation/02-platform.yaml</code>). nginx, the Kubernetes
+Ingress, and the ALB are three implementations of one idea: <em>single front
+door, route by path</em>.</p>
+<hr />
+<h2 id="4-cicd-automated-build-test-and-deploy">4. CI/CD — automated build, test, and deploy</h2>
+<p><strong>CI (Continuous Integration)</strong> = every push is automatically built and tested,
+so breakage is caught in minutes, not in code review.
+<strong>CD (Continuous Delivery/Deployment)</strong> = a change that passes CI is
+automatically packaged and shipped to a running environment.</p>
+<p>TrekEasy has <strong>three</strong> pipeline definitions doing the same job for different
+tools. You only need one; all three are kept working as reference.</p>
+<h3 id="4a-github-actions-ci-githubworkflowsciyml">4a. GitHub Actions — CI (<a href="../.github/workflows/ci.yml"><code>.github/workflows/ci.yml</code></a>)</h3>
+<p>Runs on <strong>every push and every pull request</strong>. Two parallel jobs
+(<code>backend</code>, <code>frontend</code>), each on Node 18 <strong>and</strong> 20:</p>
+<pre><code>checkout → npm ci → lint → typecheck → test → build → upload build artifact
+</code></pre>
+<p>If any step fails, the commit is marked ❌ and (for a PR) merging is blocked.</p>
+<h3 id="4b-github-actions-cd-githubworkflowscdyml">4b. GitHub Actions — CD (<a href="../.github/workflows/cd.yml"><code>.github/workflows/cd.yml</code></a>)</h3>
+<p>Runs on <strong>push to <code>main</code></strong> (or manually, choosing <code>staging</code>/<code>production</code>):</p>
+<pre><code>test  ─┐
+       ├─ deploy:
+       │    1. assume an AWS IAM role via OIDC (no long-lived keys)
+       │    2. docker login to ECR
+       │    3. aws/scripts/build-and-push.sh  → 3 images to ECR, tagged with the git SHA
+       │    4. aws/scripts/deploy.sh          → new task-def revisions + rolling update
+       └─   5. post the result to Slack (#trekeasy)
+</code></pre>
+<p>Deployment secrets/vars live in <strong>GitHub → Settings → Secrets and variables →
+Actions</strong> — never in the repo. See <code>RUNBOOK.md</code> §4.</p>
+<h3 id="4c-jenkins-jenkinsfile">4c. Jenkins (<a href="../Jenkinsfile"><code>Jenkinsfile</code></a>)</h3>
+<p>The same stages expressed as a declarative Jenkins pipeline, for teams running
+a Jenkins server instead of (or alongside) GitHub Actions:</p>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Checkout</strong></td>
+<td>pull the commit that triggered the build</td>
+</tr>
+<tr>
+<td><strong>Build</strong></td>
+<td><code>npm ci</code> + compile backend and frontend</td>
+</tr>
+<tr>
+<td><strong>Test</strong></td>
+<td><code>npm run typecheck</code> + <code>npm test</code> (backend), <code>typecheck</code> (frontend)</td>
+</tr>
+<tr>
+<td><strong>Archive</strong></td>
+<td>save <code>backend/dist/**</code> and <code>frontend/dist/**</code> as downloadable build artifacts</td>
+</tr>
+<tr>
+<td><em>post</em></td>
+<td>print success/failure, always <code>cleanWs()</code> to free disk</td>
+</tr>
+</tbody>
+</table>
+<p>It expects a <strong>Node 20 tool named <code>node20</code></strong> configured in <em>Jenkins → Manage
+Jenkins → Tools</em>. A production Jenkins setup would add <code>Push</code> and <code>Deploy</code>
+stages mirroring the GitHub CD job (build image → push to registry → roll the
+service).</p>
+<h3 id="the-pipeline-stages-in-general-terms">The pipeline stages, in general terms</h3>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Question it answers</th>
+<th>TrekEasy tooling</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Build</strong></td>
+<td>Does it compile?</td>
+<td><code>npm ci &amp;&amp; npm run build</code>, <code>docker build</code></td>
+</tr>
+<tr>
+<td><strong>Test</strong></td>
+<td>Does it behave?</td>
+<td><code>jest</code> (88 backend unit tests), <code>tsc --noEmit</code>, <code>eslint</code></td>
+</tr>
+<tr>
+<td><strong>Push</strong></td>
+<td>Where's the artifact?</td>
+<td><code>docker push</code> to <strong>ECR</strong> (<code>trekeasy-backend</code> etc.)</td>
+</tr>
+<tr>
+<td><strong>Deploy</strong></td>
+<td>How does it reach users?</td>
+<td>register a new ECS task-definition revision and <code>update-service</code> → <strong>rolling update</strong> behind the ALB health check</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="5-orchestration-manifests-kubernetes-and-ecs">5. Orchestration manifests — Kubernetes and ECS</h2>
+<p>Once you have images, something has to <strong>run</strong> them: keep the right number of
+copies alive, restart crashed ones, roll out new versions without downtime,
+and wire networking. That "something" is an <strong>orchestrator</strong>. TrekEasy ships
+configs for two.</p>
+<h3 id="5a-kubernetes-k8s-for-minikube-any-k8s-cluster">5a. Kubernetes (<a href="../k8s"><code>k8s/</code></a>) — for Minikube / any K8s cluster</h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Kind</th>
+<th>Plain English</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>namespace.yaml</code></td>
+<td>Namespace</td>
+<td>a private folder (<code>myapp</code>) for all TrekEasy objects</td>
+</tr>
+<tr>
+<td><code>app-config.yaml</code></td>
+<td>ConfigMap</td>
+<td>non-secret backend env vars (<code>NODE_ENV</code>, <code>CORS_ORIGINS</code>, …)</td>
+</tr>
+<tr>
+<td><code>db-secret.yaml</code></td>
+<td>Secret</td>
+<td><code>MONGODB_URI</code> + JWT keys (base64, <em>not</em> encrypted — see the file's note)</td>
+</tr>
+<tr>
+<td><code>mongo-deployment.yaml</code> + <code>-service.yaml</code> + <code>mongo-pvc.yaml</code></td>
+<td>Deployment / Service / PersistentVolumeClaim</td>
+<td>MongoDB (1 replica) with a 2 GiB disk that survives restarts</td>
+</tr>
+<tr>
+<td><code>backend-deployment.yaml</code> + <code>-service.yaml</code></td>
+<td>Deployment / Service</td>
+<td>the API — <strong>2 replicas</strong>, rolling updates, liveness/readiness probes on <code>/api/health</code></td>
+</tr>
+<tr>
+<td><code>backend-hpa.yaml</code></td>
+<td>HorizontalPodAutoscaler</td>
+<td>automatically scale the backend 2 → 6 pods when CPU &gt; 70 %</td>
+</tr>
+<tr>
+<td><code>frontend-deployment.yaml</code> + <code>-service.yaml</code></td>
+<td>Deployment / Service</td>
+<td>the Expo web bundle — 2 replicas, ClusterIP (only the Ingress can reach it)</td>
+</tr>
+<tr>
+<td><code>ingress.yaml</code></td>
+<td>Ingress</td>
+<td>the single front door on <code>app.local</code>, same path routing as nginx</td>
+</tr>
+</tbody>
+</table>
+<p>Core Kubernetes vocabulary: a <strong>Pod</strong> is one running container group; a
+<strong>Deployment</strong> keeps <em>N</em> identical Pods alive and does rolling updates; a
+<strong>Service</strong> is a stable internal name+IP load-balancing across a Deployment's
+Pods; an <strong>Ingress</strong> exposes Services to the outside world by hostname/path.</p>
+<h3 id="5b-aws-ecs-on-fargate-aws-the-target-for-this-project">5b. AWS ECS on Fargate (<a href="../aws"><code>aws/</code></a>) — the target for this project</h3>
+<p><strong>ECS</strong> (Elastic Container Service) is AWS's orchestrator. <strong>Fargate</strong> is the
+"serverless" mode: you never create or patch EC2 servers — you hand AWS a task
+definition and it finds capacity to run it. <code>launchType: FARGATE</code> throughout.</p>
+<p>ECS vocabulary mapped to Kubernetes:</p>
+<table>
+<thead>
+<tr>
+<th>ECS</th>
+<th>≈ Kubernetes</th>
+<th>TrekEasy</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Task definition</strong></td>
+<td>Pod spec</td>
+<td>one per tier — image, CPU/memory, ports, env, secrets, health check, log config, volumes</td>
+</tr>
+<tr>
+<td><strong>Task</strong></td>
+<td>Pod</td>
+<td>one running copy of a task definition</td>
+</tr>
+<tr>
+<td><strong>Service</strong></td>
+<td>Deployment</td>
+<td>keeps <em>N</em> tasks alive, does rolling updates, registers them with the load balancer</td>
+</tr>
+<tr>
+<td><strong>Cluster</strong></td>
+<td>(the cluster)</td>
+<td><code>trekeasy-cluster</code> — just a namespace for services</td>
+</tr>
+<tr>
+<td><strong>Cloud Map</strong></td>
+<td>kube-dns / Service</td>
+<td>private DNS: <code>mongo.trekeasy.local</code> → the database task's IP</td>
+</tr>
+<tr>
+<td><strong>ALB + target groups</strong></td>
+<td>Ingress</td>
+<td>single front door, path routing</td>
+</tr>
+<tr>
+<td><strong>EFS volume</strong></td>
+<td>PersistentVolumeClaim</td>
+<td>durable <code>/data/db</code> for Mongo, <code>/uploads</code> for the backend</td>
+</tr>
+<tr>
+<td><strong>Secrets Manager</strong></td>
+<td>Secret</td>
+<td>JWT keys, injected as env vars at task start</td>
+</tr>
+<tr>
+<td><strong>Task execution role</strong></td>
+<td>—</td>
+<td>lets the ECS agent pull images / read secrets / write logs</td>
+</tr>
+<tr>
+<td><strong>Task role</strong></td>
+<td>ServiceAccount (IRSA)</td>
+<td>permissions for the app code itself (empty here — TrekEasy calls no AWS APIs)</td>
+</tr>
+</tbody>
+</table>
+<p>The three CloudFormation stacks:</p>
+<pre><code>01-network.yaml   VPC, 2 Availability Zones, public subnets (ALB + NAT),
+                  private subnets (every task runs here, no public IP).
+
+02-platform.yaml  3 ECR repos · 3 CloudWatch log groups · IAM roles ·
+                  4 security groups (ALB→app→db→EFS, least privilege) ·
+                  internet-facing ALB with the /api,/uploads,/socket.io rules ·
+                  encrypted EFS file system + access points ·
+                  Cloud Map namespace &quot;trekeasy.local&quot; ·
+                  Secrets Manager secret &quot;trekeasy/jwt&quot;.
+
+03-services.yaml  ECS cluster · backend/frontend/database task definitions
+                  (FARGATE) · the 3 services wired to the ALB target groups
+                  and Cloud Map.
+</code></pre>
+<p><strong>Network security posture:</strong> the ALB is the only thing with a public IP.
+Backend and frontend tasks accept traffic <strong>only from the ALB's security
+group</strong>; the database accepts traffic <strong>only from the backend's security
+group</strong>; EFS accepts NFS <strong>only from backend + database</strong>. Outbound internet
+(for pulling images, Cloudinary, etc.) goes through the NAT Gateway.</p>
+<hr />
+<h2 id="6-one-change-five-environments">6. One change, five environments</h2>
+<table>
+<thead>
+<tr>
+<th>You run…</th>
+<th>It becomes…</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>npm run start:dev</code></td>
+<td>local Node process, Mongo on <code>localhost</code></td>
+</tr>
+<tr>
+<td><code>docker compose up</code></td>
+<td>4 containers on your laptop, nginx on <code>:80</code></td>
+</tr>
+<tr>
+<td>push to a branch</td>
+<td>GitHub Actions CI: lint + typecheck + test + build</td>
+</tr>
+<tr>
+<td><code>kubectl apply -f k8s/</code></td>
+<td>2+2+1 pods on Minikube, Ingress on <code>app.local</code></td>
+</tr>
+<tr>
+<td>push to <code>main</code></td>
+<td>GitHub Actions CD → ECR → ECS Fargate rolling update behind the ALB</td>
+</tr>
+</tbody>
+</table>
+<p>Same source, same Dockerfiles, same health checks, same routing rules — only
+the orchestrator changes.</p><hr style="page-break-after: always; border: none;"><h1>Part 2 — DevOps Runbook</h1><h1 id="trekeasy-devops-runbook-what-you-should-do">TrekEasy — DevOps Runbook ("What you should do")</h1>
+<p>Every exact command to set up, build, test, run, and deploy TrekEasy from
+scratch — locally, on Kubernetes, and on <strong>AWS ECS Fargate</strong> — plus the
+manual, click-in-the-console steps that <strong>cannot</strong> be scripted.</p>
+<p>Commands are <strong>Linux / macOS / WSL / Git-Bash</strong> (<code>bash</code>). On native Windows
+PowerShell, swap <code>export X=y</code> for <code>$env:X="y"</code> and <code>$(cmd)</code> for <code>$(cmd)</code> (same)
+— or just use WSL.</p>
+<p>Legend: 🖱️ = manual action in a browser / console · ⌨️ = terminal command.</p>
+<hr />
+<h2 id="0-install-the-tools-one-time-per-workstation">0. Install the tools (one time, per workstation)</h2>
+<p>⌨️</p>
+<pre><code class="language-bash"># Node.js 20 (via nvm)
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+nvm install 20 &amp;&amp; nvm use 20
+node -v            # v20.x
+npm -v
+
+# Docker Engine + Compose plugin  (Docker Desktop on Mac/Windows)
+docker --version
+docker compose version
+
+# AWS CLI v2
+curl &quot;https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip&quot; -o awscliv2.zip
+unzip awscliv2.zip &amp;&amp; sudo ./aws/install
+aws --version      # aws-cli/2.x
+
+# jq (used by aws/scripts/deploy.sh)
+sudo apt-get install -y jq        # or: brew install jq
+
+# Only for the Kubernetes path:
+curl -LO &quot;https://dl.k8s.io/release/$(curl -Ls https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl&quot;
+sudo install kubectl /usr/local/bin/kubectl
+curl -LO https://github.com/kubernetes/minikube/releases/latest/download/minikube-linux-amd64
+sudo install minikube-linux-amd64 /usr/local/bin/minikube
+</code></pre>
+<hr />
+<h2 id="1-get-the-code-and-generate-secrets">1. Get the code and generate secrets</h2>
+<p>⌨️</p>
+<pre><code class="language-bash">git clone &lt;this-repo-url&gt; TREKEASY-FINAL
+cd TREKEASY-FINAL
+
+# Two 64-hex-character JWT signing keys. Keep them somewhere safe.
+openssl rand -hex 32     # -&gt; JWT_SECRET
+openssl rand -hex 32     # -&gt; JWT_REFRESH_SECRET
+</code></pre>
+<hr />
+<h2 id="2-run-it-locally-no-docker-fastest-inner-loop">2. Run it locally — no Docker (fastest inner loop)</h2>
+<p>You need a MongoDB somewhere. Quickest is a throwaway container:</p>
+<p>⌨️</p>
+<pre><code class="language-bash">docker run -d --name trekeasy-database -p 27017:27017 mongo:7-jammy
+</code></pre>
+<h3 id="backend">Backend</h3>
+<p>⌨️</p>
+<pre><code class="language-bash">cd backend
+cp .env.example .env
+#   edit .env:
+#     MONGODB_URI=mongodb://localhost:27017/trekeasy
+#     JWT_SECRET=&lt;first key from step 1&gt;
+#     JWT_REFRESH_SECRET=&lt;second key&gt;
+#     NODE_ENV=development
+npm ci
+npm run typecheck        # must pass
+npm test                 # 88 tests, must pass
+npm run start:dev        # -&gt; http://localhost:3001/api
+</code></pre>
+<p>Verify:
+⌨️</p>
+<pre><code class="language-bash">curl -s http://localhost:3001/api/health        # {&quot;status&quot;:&quot;ok&quot;,...}
+</code></pre>
+<h3 id="frontend-second-terminal">Frontend (second terminal)</h3>
+<p>⌨️</p>
+<pre><code class="language-bash">cd frontend
+npm ci
+npm run typecheck
+npm run dev              # Expo dev server; press w for web, or scan the QR in Expo Go
+</code></pre>
+<h3 id="useful-backend-scripts">Useful backend scripts</h3>
+<p>⌨️</p>
+<pre><code class="language-bash">cd backend
+npm run seed:destinations     # load the trek catalogue into Mongo
+npm run lint
+</code></pre>
+<hr />
+<h2 id="3-run-the-whole-stack-locally-docker-compose">3. Run the whole stack locally — Docker Compose</h2>
+<p>⌨️</p>
+<pre><code class="language-bash">cd TREKEASY-FINAL
+cp .env.example .env
+#   edit .env: set JWT_SECRET and JWT_REFRESH_SECRET (from step 1).
+#   Leave NODE_ENV=production and CORS_ORIGINS=http://localhost as-is.
+
+docker compose up --build            # builds trekeasy-database / -backend / -frontend + nginx
+</code></pre>
+<p>Open <strong>http://localhost</strong>.</p>
+<p>⌨️ Day-to-day:</p>
+<pre><code class="language-bash">docker compose ps                    # status + health of the 4 containers
+docker compose logs -f backend       # tail one service
+docker compose down                  # stop
+docker compose down -v               # stop AND wipe the Mongo volume
+docker compose up -d --build backend # rebuild+restart just one service
+</code></pre>
+<p>Images produced (named consistently): <code>trekeasy-frontend:latest</code>,
+<code>trekeasy-backend:latest</code>, <code>trekeasy-database:latest</code>.</p>
+<hr />
+<h2 id="4-manual-aws-setup-do-this-once-by-hand">4. 🖱️ MANUAL AWS SETUP — do this once, by hand</h2>
+<p>These steps create identities and permissions. They are deliberately <strong>not</strong>
+in a script: they need a human with account-owner access and they rarely
+change.</p>
+<h3 id="41-aws-account-admin-cli-access">4.1 AWS account + admin CLI access</h3>
+<ol>
+<li>🖱️ Create or use an AWS account. Sign in to the <strong>Console</strong>.</li>
+<li>🖱️ <strong>IAM → Users → Create user</strong> → name <code>trekeasy-admin</code> → attach
+   <strong>AdministratorAccess</strong> (for bootstrapping only; tighten later).</li>
+<li>🖱️ That user → <strong>Security credentials → Create access key → CLI</strong>.</li>
+<li>⌨️ On your workstation:
+   <code>bash
+   aws configure
+   #   AWS Access Key ID     : &lt;from step 3&gt;
+   #   AWS Secret Access Key : &lt;from step 3&gt;
+   #   Default region name   : us-east-1        (pick one, use it everywhere)
+   #   Default output format  : json
+   aws sts get-caller-identity      # confirms you're authenticated</code></li>
+</ol>
+<h3 id="42-choose-your-region-and-export-it">4.2 Choose your region and export it</h3>
+<p>⌨️</p>
+<pre><code class="language-bash">export AWS_REGION=us-east-1
+export PROJECT_NAME=trekeasy
+</code></pre>
+<h3 id="43-put-the-jwt-keys-where-the-pipeline-expects-them">4.3 Put the JWT keys where the pipeline expects them</h3>
+<p><code>aws/scripts/provision.sh</code> reads them from your environment and writes them
+into <strong>AWS Secrets Manager</strong> (<code>trekeasy/jwt</code>). Nothing else needs them.</p>
+<p>⌨️</p>
+<pre><code class="language-bash">export JWT_SECRET=&lt;first key from step 1&gt;
+export JWT_REFRESH_SECRET=&lt;second key from step 1&gt;
+</code></pre>
+<h3 id="44-github-aws-trust-for-the-cd-workflow-skip-if-deploying-only-from-your-laptop">4.4 🖱️ GitHub → AWS trust, for the CD workflow (skip if deploying only from your laptop)</h3>
+<p>The CD workflow authenticates to AWS with <strong>OIDC</strong> — no stored AWS keys.</p>
+<ol>
+<li>🖱️ <strong>IAM → Identity providers → Add provider</strong>
+   - Type: <strong>OpenID Connect</strong>
+   - Provider URL: <code>https://token.actions.githubusercontent.com</code>
+   - Audience: <code>sts.amazonaws.com</code></li>
+<li>🖱️ <strong>IAM → Roles → Create role → Web identity</strong>
+   - Identity provider: the one just added
+   - Audience: <code>sts.amazonaws.com</code>
+   - Add a trust-policy condition so only <em>this</em> repo can assume it:
+     <code>json
+     "StringLike": { "token.actions.githubusercontent.com:sub": "repo:&lt;ORG&gt;/&lt;REPO&gt;:*" }</code>
+   - Permissions: start with <strong>AmazonEC2ContainerRegistryPowerUser</strong> +
+     <strong>AmazonECS_FullAccess</strong> + <code>cloudformation:*</code> on the <code>trekeasy-*</code> stacks
+     (tighten afterwards). Name it <code>trekeasy-github-deploy</code>. Copy its ARN.</li>
+<li>🖱️ <strong>GitHub repo → Settings → Secrets and variables → Actions</strong>
+   - <strong>New repository secret</strong>: <code>AWS_DEPLOY_ROLE_ARN</code> = the role ARN
+   - <strong>New repository secret</strong>: <code>SLACK_WEBHOOK_URL</code> = your Slack incoming webhook (optional)
+   - <strong>New repository variable</strong>: <code>AWS_REGION</code> = <code>us-east-1</code></li>
+</ol>
+<h3 id="45-optional-https">4.5 🖱️ (Optional) HTTPS</h3>
+<p>The templates create an <strong>HTTP :80</strong> listener. For real HTTPS:
+1. 🖱️ <strong>Route 53</strong> — register or import a domain.
+2. 🖱️ <strong>ACM (Certificate Manager)</strong> in your region — request a public cert for
+   e.g. <code>trekeasy.example.com</code>, validate via DNS.
+3. 🖱️ <strong>EC2 → Load Balancers → trekeasy-alb → Listeners</strong> — add a <strong>:443</strong>
+   listener with the cert, same rules as :80; change the :80 listener to
+   <em>redirect to :443</em>.
+4. 🖱️ <strong>Route 53</strong> — <code>A</code>/<code>ALIAS</code> record <code>trekeasy.example.com</code> → the ALB.
+5. ⌨️ Update the backend's <code>CORS_ORIGINS</code> to <code>https://trekeasy.example.com</code>
+   (edit <code>03-services.yaml</code> or the task definition) and redeploy.</p>
+<h3 id="46-environment-variable-ownership-who-sets-what-where">4.6 Environment-variable ownership (who sets what, where)</h3>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Where it lives in AWS</th>
+<th>Set by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>JWT_SECRET</code>, <code>JWT_REFRESH_SECRET</code></td>
+<td>Secrets Manager <code>trekeasy/jwt</code></td>
+<td><code>provision.sh</code> from your shell env (§4.3)</td>
+</tr>
+<tr>
+<td><code>MONGODB_URI</code></td>
+<td>backend task definition (<code>mongodb://mongo.trekeasy.local:27017/trekeasy</code>)</td>
+<td>CloudFormation, automatic</td>
+</tr>
+<tr>
+<td><code>CORS_ORIGINS</code>, <code>PUBLIC_BASE_URL</code></td>
+<td>backend task definition</td>
+<td>CloudFormation, derived from the ALB DNS name</td>
+</tr>
+<tr>
+<td><code>NODE_ENV</code>, <code>PORT</code>, <code>TRUST_PROXY</code></td>
+<td>backend task definition</td>
+<td>CloudFormation, static</td>
+</tr>
+<tr>
+<td><code>EXPO_PUBLIC_API_URL</code></td>
+<td><strong>baked into the frontend image</strong> at build (<code>/api</code>)</td>
+<td><code>build-and-push.sh --build-arg</code></td>
+</tr>
+<tr>
+<td><code>CLOUDINARY_*</code></td>
+<td><em>not set</em> → uploads use the EFS <code>/uploads</code> volume</td>
+<td>add to <code>03-services.yaml</code> <code>Environment</code> / <code>Secrets</code> if you adopt Cloudinary</td>
+</tr>
+<tr>
+<td><code>AWS_DEPLOY_ROLE_ARN</code>, <code>SLACK_WEBHOOK_URL</code>, <code>AWS_REGION</code></td>
+<td>GitHub Actions secrets/variables</td>
+<td>you, in the GitHub UI (§4.4)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="5-deploy-to-aws-ecs-fargate-from-scratch">5. Deploy to AWS ECS Fargate — from scratch</h2>
+<p>Prereqs: §0 (tools), §1 (secrets), §4.1–4.3 done, shell has <code>AWS_REGION</code>,
+<code>PROJECT_NAME</code>, <code>JWT_SECRET</code>, <code>JWT_REFRESH_SECRET</code> exported.</p>
+<h3 id="51-create-the-network-platform-vpc-alb-ecr-efs-iam-secrets">5.1 Create the network + platform (VPC, ALB, ECR, EFS, IAM, secrets)</h3>
+<p>⌨️</p>
+<pre><code class="language-bash">cd TREKEASY-FINAL
+chmod +x aws/scripts/*.sh
+
+./aws/scripts/provision.sh          # no tag -&gt; stops after the platform stack
+#   deploys:  trekeasy-network   (VPC, subnets, NAT gateway)
+#             trekeasy-platform  (ECR repos, ALB, IAM, EFS, Cloud Map, secret)
+</code></pre>
+<p>Run with no argument the first time — the ECS <strong>services</strong> stack is created in
+§5.3, once the ECR repos have images to pull.</p>
+<h3 id="52-build-and-push-the-three-images-to-ecr">5.2 Build and push the three images to ECR</h3>
+<p>⌨️</p>
+<pre><code class="language-bash">./aws/scripts/build-and-push.sh
+#   -&gt; &lt;acct&gt;.dkr.ecr.&lt;region&gt;.amazonaws.com/trekeasy-database : &lt;git-sha&gt; + latest
+#   -&gt; ...                                    /trekeasy-backend  : &lt;git-sha&gt; + latest
+#   -&gt; ...                                    /trekeasy-frontend : &lt;git-sha&gt; + latest
+</code></pre>
+<h3 id="53-create-the-ecs-services-pinned-to-a-real-image-tag">5.3 Create the ECS services, pinned to a real image tag</h3>
+<p>⌨️</p>
+<pre><code class="language-bash">TAG=$(git rev-parse --short HEAD)
+./aws/scripts/provision.sh &quot;$TAG&quot;        # now deploys trekeasy-services, pinned :$TAG
+
+# Wait until all three services are stable:
+aws ecs wait services-stable --region &quot;$AWS_REGION&quot; --cluster trekeasy-cluster \
+  --services trekeasy-database trekeasy-backend trekeasy-frontend
+</code></pre>
+<h3 id="54-get-the-url-and-smoke-test">5.4 Get the URL and smoke-test</h3>
+<p>⌨️</p>
+<pre><code class="language-bash">APP_URL=$(aws cloudformation describe-stacks --region &quot;$AWS_REGION&quot; \
+  --stack-name trekeasy-platform \
+  --query 'Stacks[0].Outputs[?OutputKey==`AppUrl`].OutputValue' --output text)
+echo &quot;$APP_URL&quot;
+
+curl -s &quot;$APP_URL/api/health&quot;          # {&quot;status&quot;:&quot;ok&quot;,...}
+curl -sI &quot;$APP_URL/&quot;                   # 200, text/html  (the Expo bundle)
+</code></pre>
+<h3 id="55-trek-catalogue">5.5 Trek catalogue</h3>
+<p>Nothing to do — the backend seeds the destination catalogue on every boot
+(<code>DestinationsService.onModuleInit</code>, an idempotent upsert). Confirm once the
+backend is healthy:</p>
+<p>⌨️</p>
+<pre><code class="language-bash">curl -s &quot;$APP_URL/api/destinations&quot; | head -c 300
+</code></pre>
+<p>To force a refresh after editing <code>backend/src/data/trek-metadata.ts</code>, redeploy
+the backend (§6) — the new task re-runs the upsert.</p>
+<hr />
+<h2 id="6-day-2-operations">6. Day-2 operations</h2>
+<h3 id="ship-a-new-version-what-cd-does-automatically-on-push-to-main">Ship a new version (what CD does automatically on push to <code>main</code>)</h3>
+<p>⌨️</p>
+<pre><code class="language-bash">TAG=$(git rev-parse --short HEAD)
+./aws/scripts/build-and-push.sh &quot;$TAG&quot;
+./aws/scripts/deploy.sh &quot;$TAG&quot;        # new task-def revisions + rolling update, waits for stable
+</code></pre>
+<h3 id="roll-back">Roll back</h3>
+<p>⌨️</p>
+<pre><code class="language-bash">aws ecs describe-services --region &quot;$AWS_REGION&quot; --cluster trekeasy-cluster \
+  --services trekeasy-backend --query 'services[0].taskDefinition'      # current revision
+
+aws ecs update-service --region &quot;$AWS_REGION&quot; --cluster trekeasy-cluster \
+  --service trekeasy-backend --task-definition trekeasy-backend:&lt;PREVIOUS_REVISION&gt;
+</code></pre>
+<h3 id="logs">Logs</h3>
+<p>⌨️</p>
+<pre><code class="language-bash">aws logs tail /ecs/trekeasy-backend  --region &quot;$AWS_REGION&quot; --follow
+aws logs tail /ecs/trekeasy-frontend --region &quot;$AWS_REGION&quot; --since 1h
+aws logs tail /ecs/trekeasy-database --region &quot;$AWS_REGION&quot; --since 1h
+</code></pre>
+<h3 id="scale">Scale</h3>
+<p>⌨️</p>
+<pre><code class="language-bash">aws ecs update-service --region &quot;$AWS_REGION&quot; --cluster trekeasy-cluster \
+  --service trekeasy-backend --desired-count 4
+</code></pre>
+<p>(or edit <code>BackendDesiredCount</code> in <code>03-services.yaml</code> and re-run <code>provision.sh $TAG</code>.)</p>
+<h3 id="change-a-backend-env-var-secret">Change a backend env var / secret</h3>
+<ul>
+<li>Non-secret: edit <code>Environment</code> in <code>aws/cloudformation/03-services.yaml</code>, then
+  <code>./aws/scripts/provision.sh $TAG</code>.</li>
+<li>Secret: ⌨️
+  <code>bash
+  aws secretsmanager put-secret-value --region "$AWS_REGION" \
+    --secret-id trekeasy/jwt \
+    --secret-string '{"JWT_SECRET":"...","JWT_REFRESH_SECRET":"..."}'
+  aws ecs update-service --region "$AWS_REGION" --cluster trekeasy-cluster \
+    --service trekeasy-backend --force-new-deployment</code></li>
+</ul>
+<h3 id="open-a-shell-in-a-running-task-debugging">Open a shell in a running task (debugging)</h3>
+<p>⌨️</p>
+<pre><code class="language-bash">aws ecs update-service --region &quot;$AWS_REGION&quot; --cluster trekeasy-cluster \
+  --service trekeasy-backend --enable-execute-command --force-new-deployment
+# then:
+TASK=$(aws ecs list-tasks --region &quot;$AWS_REGION&quot; --cluster trekeasy-cluster \
+  --service-name trekeasy-backend --query 'taskArns[0]' --output text)
+aws ecs execute-command --region &quot;$AWS_REGION&quot; --cluster trekeasy-cluster \
+  --task &quot;$TASK&quot; --container trekeasy-backend --interactive --command &quot;/bin/sh&quot;
+</code></pre>
+<h3 id="tear-it-all-down-stops-billing">Tear it all down (stops billing)</h3>
+<p>⌨️</p>
+<pre><code class="language-bash">aws ecs update-service --region &quot;$AWS_REGION&quot; --cluster trekeasy-cluster --service trekeasy-frontend --desired-count 0
+aws ecs update-service --region &quot;$AWS_REGION&quot; --cluster trekeasy-cluster --service trekeasy-backend  --desired-count 0
+aws ecs update-service --region &quot;$AWS_REGION&quot; --cluster trekeasy-cluster --service trekeasy-database --desired-count 0
+
+aws cloudformation delete-stack --region &quot;$AWS_REGION&quot; --stack-name trekeasy-services
+aws cloudformation wait stack-delete-complete --region &quot;$AWS_REGION&quot; --stack-name trekeasy-services
+aws cloudformation delete-stack --region &quot;$AWS_REGION&quot; --stack-name trekeasy-platform
+aws cloudformation wait stack-delete-complete --region &quot;$AWS_REGION&quot; --stack-name trekeasy-platform
+aws cloudformation delete-stack --region &quot;$AWS_REGION&quot; --stack-name trekeasy-network
+</code></pre>
+<blockquote>
+<p>ECR repos and the EFS file system have deletion protection semantics — if a
+stack delete stalls on them, 🖱️ empty the ECR repos and delete EFS in the
+console, then retry. The <code>trekeasy/jwt</code> secret is retained for 7–30 days by
+AWS before permanent deletion.</p>
+</blockquote>
+<hr />
+<h2 id="7-kubernetes-minikube-alternative-to-ecs">7. Kubernetes (Minikube) — alternative to ECS</h2>
+<p>⌨️</p>
+<pre><code class="language-bash">minikube start
+eval $(minikube docker-env)      # build images straight into Minikube's Docker
+
+docker build -f backend/Dockerfile          -t trekeasy-backend:latest  .
+docker build -f frontend/Dockerfile --build-arg EXPO_PUBLIC_API_URL=/api \
+                                            -t trekeasy-frontend:latest frontend
+docker build -f backend-database/Dockerfile -t trekeasy-database:latest backend-database
+
+minikube addons enable ingress
+minikube addons enable metrics-server
+
+# db-secret.yaml ships with demo JWT keys — replace them first:
+#   node -e &quot;console.log(require('crypto').randomBytes(32).toString('hex'))&quot;
+kubectl apply -f k8s/
+
+kubectl get pods -n myapp -w
+echo &quot;$(minikube ip) app.local&quot; | sudo tee -a /etc/hosts
+curl http://app.local/api/health
+</code></pre>
+<p>Rolling update / rollback:
+⌨️</p>
+<pre><code class="language-bash">kubectl apply -f k8s/backend-deployment.yaml
+kubectl rollout status deployment/backend -n myapp
+kubectl rollout undo   deployment/backend -n myapp
+</code></pre>
+<hr />
+<h2 id="8-full-from-zero-checklist">8. Full "from zero" checklist</h2>
+<ul>
+<li>[ ] §0 tools installed (<code>node -v</code>, <code>docker --version</code>, <code>aws --version</code>, <code>jq --version</code>)</li>
+<li>[ ] §1 repo cloned, two <code>openssl rand -hex 32</code> keys saved</li>
+<li>[ ] Local: <code>backend</code> <code>npm ci &amp;&amp; npm test</code> green; <code>npm run start:dev</code>; <code>/api/health</code> = ok</li>
+<li>[ ] Local: <code>frontend</code> <code>npm ci &amp;&amp; npm run typecheck</code>; <code>npm run dev</code> loads</li>
+<li>[ ] Compose: <code>.env</code> filled; <code>docker compose up --build</code>; http://localhost works</li>
+<li>[ ] 🖱️ §4.1 AWS account, <code>trekeasy-admin</code> IAM user, <code>aws configure</code>, <code>aws sts get-caller-identity</code></li>
+<li>[ ] ⌨️ §4.2–4.3 <code>AWS_REGION</code>, <code>PROJECT_NAME</code>, <code>JWT_SECRET</code>, <code>JWT_REFRESH_SECRET</code> exported</li>
+<li>[ ] 🖱️ §4.4 GitHub OIDC provider + <code>trekeasy-github-deploy</code> role + repo secrets/vars (if using CD)</li>
+<li>[ ] ⌨️ §5.1 <code>./aws/scripts/provision.sh</code></li>
+<li>[ ] ⌨️ §5.2 <code>./aws/scripts/build-and-push.sh</code></li>
+<li>[ ] ⌨️ §5.3 <code>./aws/scripts/provision.sh $(git rev-parse --short HEAD)</code> + <code>ecs wait services-stable</code></li>
+<li>[ ] ⌨️ §5.4 <code>curl $APP_URL/api/health</code> = ok</li>
+<li>[ ] ⌨️ §5.5 seed task run</li>
+<li>[ ] 🖱️ §4.5 HTTPS listener + Route 53 record (production)</li>
+<li>[ ] Push to <code>main</code> → CD builds, pushes, rolls the services, posts to Slack</li>
+</ul>
+<hr />
+<h2 id="9-troubleshooting">9. Troubleshooting</h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Likely cause</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Service won't start, <code>CannotPullContainerError</code></td>
+<td>image tag not in ECR</td>
+<td>run <code>build-and-push.sh</code> with that tag first</td>
+</tr>
+<tr>
+<td>Backend task cycles, logs show <code>ECONNREFUSED ... 27017</code></td>
+<td>database task not up yet, or <code>mongo.trekeasy.local</code> not resolving</td>
+<td>check <code>aws logs tail /ecs/trekeasy-database</code>; confirm the database service is <code>RUNNING</code>; Cloud Map record appears ~30 s after the task is healthy</td>
+</tr>
+<tr>
+<td>Backend logs: <code>CORS_ORIGINS is not set; refusing all cross-origin</code></td>
+<td><code>CORS_ORIGINS</code> empty</td>
+<td>it is derived from the ALB DNS in <code>03-services.yaml</code>; re-run <code>provision.sh $TAG</code></td>
+</tr>
+<tr>
+<td>ALB returns 503</td>
+<td>no healthy targets</td>
+<td><code>aws elbv2 describe-target-health --target-group-arn &lt;arn&gt;</code>; check the container health check + security groups</td>
+</tr>
+<tr>
+<td>Chat/socket disconnects every ~60 s</td>
+<td>idle timeout too low or no stickiness</td>
+<td>ALB idle timeout is 300 s and the backend target group has <code>lb_cookie</code> stickiness — confirm the <code>/socket.io/*</code> rule points at the backend TG</td>
+</tr>
+<tr>
+<td><code>expo export</code> OOMs in CI</td>
+<td>Node heap</td>
+<td>already handled by <code>node:20-alpine</code>; if it recurs, raise the frontend build's runner size</td>
+</tr>
+<tr>
+<td>Mongo data lost on redeploy</td>
+<td>task not using the EFS volume</td>
+<td>confirm <code>mountPoints</code> <code>/data/db</code> → <code>mongo-data</code> in the database task def; EFS mount targets exist in both AZs</td>
+</tr>
+<tr>
+<td><code>provision.sh</code> fails: <code>JWT_SECRET: unbound variable</code></td>
+<td>secrets not exported</td>
+<td><code>export JWT_SECRET=... JWT_REFRESH_SECRET=...</code> (§4.3)</td>
+</tr>
+<tr>
+<td>CD fails at "Configure AWS credentials"</td>
+<td>OIDC trust / role ARN</td>
+<td>re-check §4.4 trust policy <code>sub</code> matches <code>repo:&lt;ORG&gt;/&lt;REPO&gt;:*</code> and <code>AWS_DEPLOY_ROLE_ARN</code> secret</td>
+</tr>
+</tbody>
+</table><hr style="page-break-after: always; border: none;"></body></html>

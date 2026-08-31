@@ -1,5 +1,17 @@
 name: CD
 
+# Build the three TrekEasy images, push them to ECR, and roll the ECS Fargate
+# services onto the new tag. The infrastructure itself (VPC / ALB / cluster) is
+# provisioned once with aws/scripts/provision.sh — this workflow only ships new
+# application versions onto it.
+#
+# Required repo config (Settings -> Secrets and variables -> Actions):
+#   Secrets:  AWS_DEPLOY_ROLE_ARN   IAM role this workflow assumes via OIDC
+#             SLACK_WEBHOOK_URL     (optional) incoming webhook for #trekeasy
+#   Variables: AWS_REGION            e.g. us-east-1
+#
+# See docs/RUNBOOK.md for the one-time OIDC provider + role setup.
+
 on:
   push:
     branches: [main]
@@ -12,13 +24,21 @@ on:
         default: staging
         options: [staging, production]
 
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write   # required for aws-actions/configure-aws-credentials (OIDC)
+
 jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 20.x
 
@@ -26,6 +46,7 @@ jobs:
         working-directory: backend
         run: |
           npm ci
+          npm run lint
           npm run typecheck
           npm test
 
@@ -41,18 +62,28 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     environment: ${{ github.event.inputs.environment || 'staging' }}
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      PROJECT_NAME: trekeasy
+      IMAGE_TAG: ${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Build images
-        run: |
-          docker build -f backend/Dockerfile -t trekeasy-backend:${{ github.sha }} .
-          docker build -f frontend/Dockerfile -t trekeasy-frontend:${{ github.sha }} frontend
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Deploy
-        run: echo "Deploying trekeasy-backend:${{ github.sha }} to ${{ github.event.inputs.environment || 'staging' }}"
-        # Replace with your real rollout command, e.g.:
-        #   kubectl set image deployment/backend backend=<registry>/trekeasy-backend:${{ github.sha }} -n myapp
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push images
+        run: ./aws/scripts/build-and-push.sh "$IMAGE_TAG"
+
+      - name: Roll ECS services
+        run: ./aws/scripts/deploy.sh "$IMAGE_TAG"
 
       - name: Notify Slack
         if: always()

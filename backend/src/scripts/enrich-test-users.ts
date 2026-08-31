@@ -241,7 +241,7 @@ interface Plan {
   dismissals: { trekId: string; count: number }[];
 }
 
-function planFor(user: any, seededEmails: Set<string>): Plan | null {
+function planFor(user: any, _seededEmails: Set<string>): Plan | null {
   const email = String(user.email ?? '').toLowerCase();
   if (!email) return null;
 

@@ -1,19 +1,37 @@
+# Local full-stack run. Naming is standardized across every environment:
+#
+#   tier      image                       container            in-cluster DNS
+#   --------  --------------------------   ------------------   --------------
+#   database  trekeasy-database:latest     trekeasy-database    mongo
+#   backend   trekeasy-backend:latest      trekeasy-backend     backend
+#   frontend  trekeasy-frontend:latest     trekeasy-frontend    frontend
+#   proxy     nginx:alpine                 trekeasy-nginx       nginx
+#
+# The database's network name stays `mongo` on purpose: it is a hostname baked
+# into MONGODB_URI here, in k8s/db-secret.yaml and in the AWS Cloud Map service
+# — a load-bearing identifier, not a display name. The `database` alias below
+# lets other containers reach it by either name.
+
 services:
   mongo:
     build: ./backend-database
-    container_name: trekeasy-mongo
+    image: trekeasy-database:latest
+    container_name: trekeasy-database
     restart: unless-stopped
     environment:
       MONGO_INITDB_DATABASE: ${MONGO_DB_NAME:-trekeasy}
     volumes:
       - mongo-data:/data/db
     # healthcheck is inherited from backend-database/Dockerfile
-    networks: [trekeasy-net]
+    networks:
+      trekeasy-net:
+        aliases: [database]
 
   backend:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    image: trekeasy-backend:latest
     container_name: trekeasy-backend
     restart: unless-stopped
     env_file: .env
@@ -34,6 +52,7 @@ services:
       context: ./frontend
       args:
         EXPO_PUBLIC_API_URL: ${EXPO_PUBLIC_API_URL:-/api}
+    image: trekeasy-frontend:latest
     container_name: trekeasy-frontend
     restart: unless-stopped
     depends_on:

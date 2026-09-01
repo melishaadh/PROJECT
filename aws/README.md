@@ -1,62 +1,54 @@
-# `aws/` — ECS on Fargate deployment
+# AWS CLI v2
 
-Everything needed to run TrekEasy on **AWS ECS (Fargate launch type)** behind an
-Application Load Balancer, with the tasks in private subnets.
+This bundle contains a built executable of the AWS CLI v2.
 
+## Installation
+
+To install the AWS CLI v2, run the `install` script:
 ```
-aws/
-├── cloudformation/
-│   ├── 01-network.yaml     VPC · 2 AZs · public + private subnets · NAT
-│   ├── 02-platform.yaml    ECR · ALB · IAM roles · security groups · EFS ·
-│   │                       Cloud Map (mongo.trekeasy.local) · Secrets Manager
-│   └── 03-services.yaml    ECS cluster · 3 task definitions · 3 services
-├── task-definitions/       Stand-alone JSON copies of the 3 task defs
-│                           (the CloudFormation is the source of truth)
-└── scripts/
-    ├── provision.sh        deploy/update the 3 CloudFormation stacks
-    ├── build-and-push.sh   build the 3 images, push to ECR
-    └── deploy.sh           roll the ECS services onto a new image tag
+$ sudo ./install 
+You can now run: /usr/local/bin/aws --version
+```
+This will install the AWS CLI v2 at `/usr/local/bin/aws`.  Assuming
+`/usr/local/bin` is on your `PATH`, you can now run:
+```
+$ aws --version
 ```
 
-## What gets created
 
-| Tier | Image (ECR repo) | Task family | ECS service | Port | Reached by |
-|---|---|---|---|---|---|
-| Frontend | `trekeasy-frontend` | `trekeasy-frontend` | `trekeasy-frontend` | 8080 | ALB `/` |
-| Backend | `trekeasy-backend` | `trekeasy-backend` | `trekeasy-backend` | 3001 | ALB `/api` `/uploads` `/socket.io` |
-| Database | `trekeasy-database` | `trekeasy-database` | `trekeasy-database` | 27017 | `mongo.trekeasy.local` (backend only) |
+### Installing without sudo
 
-The ALB path routing is identical to `deploy/nginx/nginx.conf` and
-`k8s/ingress.yaml`, so the frontend bundle's baked-in `/api` base URL works
-unchanged — the ALB simply replaces nginx as the single front door.
-
-## First deploy (≈15 min)
-
-```bash
-export AWS_REGION=us-east-1
-export JWT_SECRET=$(openssl rand -hex 32)
-export JWT_REFRESH_SECRET=$(openssl rand -hex 32)
-
-./aws/scripts/provision.sh          # stacks: network, platform (creates the ECR repos)
-./aws/scripts/build-and-push.sh     # build + push :<git-sha> and :latest
-./aws/scripts/provision.sh $(git rev-parse --short HEAD)   # services stack, pinned tag
+If you don't have ``sudo`` permissions or want to install the AWS
+CLI v2 only for the current user, run the `install` script with the `-b`
+and `-i` options:
+```
+$ ./install -i ~/.local/aws-cli -b ~/.local/bin
+``` 
+This will install the AWS CLI v2 in `~/.local/aws-cli` and create
+symlinks for `aws` and `aws_completer` in `~/.local/bin`. For more
+information about these options, run the `install` script with `-h`:
+```
+$ ./install -h
 ```
 
-Open the `AppUrl` printed at the end (`http://trekeasy-alb-....elb.amazonaws.com`).
+### Updating
 
-## Every subsequent release
-
-```bash
-./aws/scripts/build-and-push.sh <tag>
-./aws/scripts/deploy.sh <tag>       # register new task-def revisions + rolling update
+If you run the `install` script and there is a previously installed version
+of the AWS CLI v2, the script will error out. To update to the version included
+in this bundle, run the `install` script with `--update`:
+```
+$ sudo ./install --update
 ```
 
-Rollback:
 
-```bash
-aws ecs update-service --cluster trekeasy-cluster --service trekeasy-backend \
-  --task-definition trekeasy-backend:<previous-revision>
+### Removing the installation
+
+To remove the AWS CLI v2, delete the its installation and symlinks:
 ```
-
-The full step-by-step, including the one-time AWS Console / IAM work, is in
-[`../docs/RUNBOOK.md`](../docs/RUNBOOK.md).
+$ sudo rm -rf /usr/local/aws-cli
+$ sudo rm /usr/local/bin/aws
+$ sudo rm /usr/local/bin/aws_completer
+```
+Note if you installed the AWS CLI v2 using the `-b` or `-i` options, you will
+need to remove the installation and the symlinks in the directories you
+specified.

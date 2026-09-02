@@ -92,7 +92,7 @@ stops being a problem. A **Dockerfile** is the recipe for building an image.
 | Dockerfile | Base image | Build strategy |
 |---|---|---|
 | [`backend/Dockerfile`](../backend/Dockerfile) | `node:20-alpine` | **multi-stage**: stage 1 installs *all* deps and compiles TypeScript → JS; stage 2 keeps only production deps + the compiled `dist/`. Smaller, fewer CVEs. |
-| [`frontend/Dockerfile`](../frontend/Dockerfile) | `node:20-alpine` → `nginx:alpine` | stage 1 runs `expo export` to produce static web files; stage 2 is just nginx serving that folder on port 8080. |
+| [`frontend/Dockerfile`](../frontend/Dockerfile) | `node:20-alpine` → `nginx:alpine` | stage 1 runs `expo export` to produce static web files and fails the build if no bundle came out; stage 2 is nginx serving that folder on port 8080 with the rules in [`frontend/nginx.conf`](../frontend/nginx.conf) — real 404s for missing hashed assets, SPA fallback only for routes. |
 | [`backend-database/Dockerfile`](../backend-database/Dockerfile) | `mongo:7-jammy` | official MongoDB + our `init-indexes.js` bootstrap script. |
 | [`deploy/nginx/Dockerfile`](../deploy/nginx/Dockerfile) (compose only) | `nginx:alpine` | the reverse proxy, with `nginx.conf` **copied into the image**. Not bind-mounted: a single-file mount tracks the file's inode, so a `git pull` or an editor save silently leaves the container on the old config until it is recreated. |
 

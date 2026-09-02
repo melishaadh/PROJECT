@@ -20,16 +20,17 @@
 # change by rebuilding, and `docker compose up --build` is then the single
 # source of truth.
 #
-# Note: no `RUN nginx -t` here on purpose. nginx resolves `proxy_pass` hostnames
-# at config-load time, so a build-time check would fail with
-# `host not found in upstream "backend"` — there is no Compose network during a
-# build. The config is validated at container start instead, where `backend` and
-# `frontend` actually resolve.
+# Note: no `RUN nginx -t` here, unlike frontend/Dockerfile. nginx resolves
+# `proxy_pass` hostnames at config-load time, so a build-time check would fail
+# with `host not found in upstream "backend"` — there is no Compose network
+# during a build. This config is validated at container start instead, where
+# `backend` and `frontend` actually resolve.
 
 FROM nginx:alpine
 
-COPY nginx.conf /etc/nginx/nginx.conf
-COPY 404.html   /usr/share/nginx/html/404.html
+COPY nginx.conf          /etc/nginx/nginx.conf
+COPY proxy_headers.conf  /etc/nginx/proxy_headers.conf
+COPY 404.html            /usr/share/nginx/html/404.html
 
 EXPOSE 80
 

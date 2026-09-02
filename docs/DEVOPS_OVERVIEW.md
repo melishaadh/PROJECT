@@ -94,7 +94,7 @@ stops being a problem. A **Dockerfile** is the recipe for building an image.
 | [`backend/Dockerfile`](../backend/Dockerfile) | `node:20-alpine` | **multi-stage**: stage 1 installs *all* deps and compiles TypeScript → JS; stage 2 keeps only production deps + the compiled `dist/`. Smaller, fewer CVEs. |
 | [`frontend/Dockerfile`](../frontend/Dockerfile) | `node:20-alpine` → `nginx:alpine` | stage 1 runs `expo export` to produce static web files; stage 2 is just nginx serving that folder on port 8080. |
 | [`backend-database/Dockerfile`](../backend-database/Dockerfile) | `mongo:7-jammy` | official MongoDB + our `init-indexes.js` bootstrap script. |
-| `deploy/nginx` (compose only) | `nginx:alpine` | the reverse proxy, config bind-mounted. |
+| [`deploy/nginx/Dockerfile`](../deploy/nginx/Dockerfile) (compose only) | `nginx:alpine` | the reverse proxy, with `nginx.conf` **copied into the image**. Not bind-mounted: a single-file mount tracks the file's inode, so a `git pull` or an editor save silently leaves the container on the old config until it is recreated. |
 
 ### Key ideas used here
 

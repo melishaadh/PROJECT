@@ -5,7 +5,7 @@
 #   database  trekeasy-database:latest     trekeasy-database    mongo
 #   backend   trekeasy-backend:latest      trekeasy-backend     backend
 #   frontend  trekeasy-frontend:latest     trekeasy-frontend    frontend
-#   proxy     nginx:alpine                 trekeasy-nginx       nginx
+#   proxy     trekeasy-nginx:latest        trekeasy-nginx       nginx
 #
 # The database's network name stays `mongo` on purpose: it is a hostname baked
 # into MONGODB_URI here, in k8s/db-secret.yaml and in the AWS Cloud Map service
@@ -61,15 +61,19 @@ services:
     # healthcheck is inherited from frontend/Dockerfile
     networks: [trekeasy-net]
 
+  # The routing config is baked into this image rather than bind-mounted — a
+  # single-file mount is pinned to the file's inode, so a git pull or an editor
+  # save left the container serving a stale config that no restart could clear.
+  # See deploy/nginx/Dockerfile. Rebuild with `docker compose up -d --build`
+  # after editing deploy/nginx/nginx.conf.
   nginx:
-    image: nginx:alpine
+    build: ./deploy/nginx
+    image: trekeasy-nginx:latest
     container_name: trekeasy-nginx
     restart: unless-stopped
     ports:
       - '80:80'
-    volumes:
-      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./deploy/nginx/404.html:/usr/share/nginx/html/404.html:ro
+    # healthcheck is inherited from deploy/nginx/Dockerfile
     depends_on:
       backend:
         condition: service_healthy

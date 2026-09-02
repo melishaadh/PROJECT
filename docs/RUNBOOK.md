@@ -114,12 +114,17 @@ npm run lint
 cd TREKEASY-FINAL
 cp .env.example .env
 #   edit .env: set JWT_SECRET and JWT_REFRESH_SECRET (from step 1).
-#   Leave NODE_ENV=production and CORS_ORIGINS=http://localhost as-is.
+#   Leave NODE_ENV=production as-is. Add the machine's LAN/VM address to
+#   CORS_ORIGINS if you will open the app by IP rather than on localhost.
 
-docker compose up --build            # builds trekeasy-database / -backend / -frontend + nginx
+docker compose up --build            # builds all four: -database / -backend / -frontend / -nginx
 ```
 
 Open **http://localhost**.
+
+`curl http://localhost/healthz` should print `trekeasy-nginx ok`. If it does not,
+the request is not reaching the proxy container at all — something else holds
+port 80 — and no change to `deploy/nginx/nginx.conf` will affect what you see.
 
 ⌨️ Day-to-day:
 ```bash

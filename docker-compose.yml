@@ -11,6 +11,25 @@
 # into MONGODB_URI here, in k8s/db-secret.yaml and in the AWS Cloud Map service
 # — a load-bearing identifier, not a display name. The `database` alias below
 # lets other containers reach it by either name.
+#
+# Host ports vs container ports
+# -----------------------------
+# This stack claims exactly ONE host port: ${HTTP_PORT:-80}, for the proxy.
+# Everything else talks over the trekeasy-net bridge, where each container has
+# its own network namespace and its own full range of 65535 ports.
+#
+# So the frontend's :8080 is NOT a conflict with Jenkins, or with anything else
+# on the host. It is never published; nothing outside trekeasy-net can address
+# it, and `frontend:8080` is reachable only from a sibling container. Two
+# processes can bind :8080 without contending as long as they are in different
+# namespaces — which a host Jenkins and this container are. Nothing here needs
+# Jenkins moved, and changing the frontend's internal port would only churn
+# frontend/nginx.conf, its healthcheck, this file, k8s/ and aws/ for no gain.
+#
+# The one port that CAN genuinely be contended is the published one. If :80 is
+# already taken on the VM, set HTTP_PORT in .env instead of editing this file —
+# and see which process holds it with:
+#   sudo ss -ltnp '( sport = :80 )'
 
 services:
   mongo:
@@ -23,6 +42,8 @@ services:
     volumes:
       - mongo-data:/data/db
     # healthcheck is inherited from backend-database/Dockerfile
+    # No `ports`: Mongo is reachable only from inside trekeasy-net, which is the
+    # entire point of not publishing a database.
     networks:
       trekeasy-net:
         aliases: [database]
@@ -40,8 +61,14 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
+    # Bound to loopback, not to every interface. The API's public entrance is
+    # the proxy on :80; publishing 0.0.0.0:3001 opened a second, unproxied door
+    # to the same API across the LAN — one that skips the X-Forwarded-* headers
+    # the rate limiter reads and the CORS posture the proxy origin implies.
+    # Still available on the VM itself for debugging:
+    #   curl http://127.0.0.1:3001/api/health
     ports:
-      - '3001:3001'
+      - '127.0.0.1:${BACKEND_DEBUG_PORT:-3001}:3001'
     volumes:
       - backend-uploads:/app/backend/uploads
     # healthcheck is inherited from backend/Dockerfile
@@ -58,6 +85,11 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    # Container-internal only — declared, deliberately not published. `expose`
+    # documents the contract that deploy/nginx/nginx.conf proxies to
+    # (`proxy_pass http://frontend:8080`) without claiming a host port.
+    expose:
+      - '8080'
     # healthcheck is inherited from frontend/Dockerfile
     networks: [trekeasy-net]
 
@@ -71,8 +103,11 @@ services:
     image: trekeasy-nginx:latest
     container_name: trekeasy-nginx
     restart: unless-stopped
+    # The stack's only public entrance. Override HTTP_PORT in .env if something
+    # else on the VM already owns 80 — but if you do, add the port to
+    # CORS_ORIGINS too, because the browser's origin changes with it.
     ports:
-      - '80:80'
+      - '${HTTP_PORT:-80}:80'
     # healthcheck is inherited from deploy/nginx/Dockerfile
     depends_on:
       backend:

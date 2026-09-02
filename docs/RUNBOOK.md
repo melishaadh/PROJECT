@@ -122,9 +122,32 @@ docker compose up --build            # builds all four: -database / -backend / -
 
 Open **http://localhost**.
 
-`curl http://localhost/healthz` should print `trekeasy-nginx ok`. If it does not,
-the request is not reaching the proxy container at all — something else holds
-port 80 — and no change to `deploy/nginx/nginx.conf` will affect what you see.
+### Which ports this stack actually claims
+
+Exactly one: `HTTP_PORT` (default `80`), published by the proxy. Set it in
+`.env` — not in `docker-compose.yml` — if the VM already has something on 80.
+
+| Port | Where it lives | Published to the host? |
+|---|---|---|
+| `80` | `trekeasy-nginx` | **yes** — the only public entrance (`HTTP_PORT`) |
+| `3001` | `trekeasy-backend` | `127.0.0.1` only, for debugging (`BACKEND_DEBUG_PORT`) |
+| `8080` | `trekeasy-frontend` | **no** — container-internal |
+| `27017` | `trekeasy-database` | **no** — container-internal |
+
+**Jenkins on 8080 does not conflict with this stack.** The frontend's 8080 is
+inside its own network namespace and is never published, so nothing on the host
+can address it and it cannot contend for the host's 8080. `frontend:8080` is
+resolvable only from a sibling container on `trekeasy-net`. A host process and
+an unpublished container port are free to use the same number.
+
+If a page fails to load, check what owns the port that *is* published:
+
+⌨️
+```bash
+sudo ss -ltnp '( sport = :80 )'      # who holds 80 — should be docker-proxy
+docker compose ps                    # is trekeasy-nginx Up and healthy?
+curl -i http://localhost/healthz     # 200 "trekeasy-nginx ok" => the proxy answered
+```
 
 ⌨️ Day-to-day:
 ```bash

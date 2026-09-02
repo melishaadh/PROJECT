@@ -91,7 +91,11 @@ cp .env.example .env       # fill in JWT_SECRET, JWT_REFRESH_SECRET
 docker compose up --build
 ```
 
-Then open **http://localhost**. nginx routes `/` to the frontend and `/api` to the backend (see [`deploy/nginx/nginx.conf`](deploy/nginx/nginx.conf)).
+Then open **http://localhost**. nginx routes `/` to the frontend and `/api` to the backend (see [`deploy/nginx/nginx.conf`](deploy/nginx/nginx.conf)), and answers `/healthz` with `trekeasy-nginx ok` so you can tell "the proxy is serving port 80" apart from "something else is".
+
+If you reach the app by IP instead of `localhost`, add that origin to `CORS_ORIGINS` in `.env` or the chat socket handshake will be refused.
+
+That config is **copied into the `trekeasy-nginx` image**, not bind-mounted, so edits to it need a rebuild: `docker compose up -d --build nginx`.
 
 ```bash
 docker compose down          # stop

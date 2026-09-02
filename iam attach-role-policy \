@@ -1,0 +1,43 @@
+{
+    "Role": {
+        "Path": "/",
+        "RoleName": "trekeasy-ecs-task-execution-role",
+        "RoleId": "AROA2V6HEHAMQJVW46Q43",
+        "Arn": "arn:aws:iam::734320146457:role/trekeasy-ecs-task-execution-role",
+        "CreateDate": "2026-09-02T14:14:40+00:00",
+        "AssumeRolePolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {
+                        "Service": "ecs-tasks.amazonaws.com"
+                    },
+                    "Action": "sts:AssumeRole"
+                }
+            ]
+        },
+        "Tags": [
+            {
+                "Key": "Name",
+                "Value": "trekeasy-ecs-task-execution-role"
+            },
+            {
+                "Key": "Project",
+                "Value": "TrekEasy"
+            },
+            {
+                "Key": "Environment",
+                "Value": "Production"
+            },
+            {
+                "Key": "Application",
+                "Value": "TrekEasy"
+            },
+            {
+                "Key": "ManagedBy",
+                "Value": "Melisha"
+            }
+        ]
+    }
+}

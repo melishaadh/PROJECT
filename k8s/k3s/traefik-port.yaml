@@ -1,0 +1,36 @@
+# Moves K3s's bundled Traefik off host port 80 so Docker Compose's
+# trekeasy-nginx can keep it.
+#
+# The conflict is not in this repo: K3s installs its own Traefik from
+# /var/lib/rancher/k3s/server/manifests/traefik.yaml, and the resulting
+# LoadBalancer Service is mirrored onto the host by the klipper-lb (svclb)
+# DaemonSet, whose pods take hostPort 80. Docker's `-p 80:80` then cannot bind.
+#
+# `exposedPort` is the *Service* port, which is what svclb mirrors to the host.
+# `port` (Traefik's own container port, 8000) is deliberately left alone — only
+# the host-facing number moves. Nothing about Kubernetes networking, Traefik
+# itself, or the internal app ports (frontend 8080, backend 3001, mongo 27017)
+# changes.
+#
+# HelmChartConfig is additive: k3s's helm-controller merges these values over
+# the bundled chart's own values on the next reconcile, so the stock
+# traefik.yaml is never edited and a K3s upgrade will not clobber this.
+#
+# Install it into the auto-deploy directory so it is re-applied on every k3s
+# start and therefore survives a reboot:
+#
+#   sudo cp k8s/k3s/traefik-port.yaml /var/lib/rancher/k3s/server/manifests/
+#
+# Deliberately NOT in k8s/ itself: `kubectl apply -f k8s/` is non-recursive, so
+# keeping this in a subdirectory means the documented minikube path (which has
+# no HelmChartConfig CRD and would fail with "no matches for kind") is unaffected.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    ports:
+      web:
+        exposedPort: 8081

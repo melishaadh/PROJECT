@@ -1,0 +1,66 @@
+# Traefik-class Ingress for the K3s path.
+#
+# Why this exists alongside k8s/ingress.yaml rather than replacing it:
+# k8s/ingress.yaml declares `ingressClassName: nginx` with
+# `nginx.ingress.kubernetes.io/*` annotations, which is correct for the
+# documented Minikube path (`minikube addons enable ingress`). K3s ships
+# Traefik instead, whose class is `traefik` — it never claims an nginx-class
+# Ingress, so on K3s that manifest is inert and every request 404s no matter
+# which port Traefik listens on.
+#
+# Two Ingresses, two classes, one namespace: each controller claims only its
+# own, so Minikube keeps using k8s/ingress.yaml and K3s uses this one. Neither
+# path changes behaviour for the other, and no existing file is rewritten.
+#
+# Path routing is identical to deploy/nginx/nginx.conf and k8s/ingress.yaml:
+#   /socket.io -> backend   real-time chat handshake + WebSocket
+#   /uploads   -> backend   locally-stored images, outside the /api prefix
+#   /api       -> backend   REST API
+#   /          -> frontend  Expo web static bundle
+# Traefik orders rules by path specificity automatically, so `/` last is safe.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: trekeasy-ingress-traefik
+  namespace: myapp
+  annotations:
+    # Bind to the `web` entrypoint — the one moved to host :8081 by
+    # k8s/k3s/traefik-port.yaml.
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    # No `host:` on purpose. A host-scoped rule (`app.local`) would not match a
+    # request to http://localhost:8081/, which is how this cluster is reached
+    # now. Omitting it matches any Host header, so localhost, app.local and the
+    # VM's own IP all resolve to the same routes.
+    - http:
+        paths:
+          - path: /socket.io
+            pathType: Prefix
+            backend:
+              service:
+                name: backend-service
+                port:
+                  number: 3001
+          - path: /uploads
+            pathType: Prefix
+            backend:
+              service:
+                name: backend-service
+                port:
+                  number: 3001
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend-service
+                port:
+                  number: 3001
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-service
+                port:
+                  number: 8080

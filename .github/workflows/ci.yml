@@ -1,5 +1,15 @@
 name: CI
 
+# Continuous Integration — runs on every push (any branch) and on pull
+# requests into main. Installs, lints, type-checks, tests and builds the
+# backend and frontend on Node 18 and 20, so a compatibility break shows up
+# before merge.
+#
+# This is separate from Jenkins CI (see ../../Jenkinsfile), which runs the
+# same kind of checks and is the one that actually gates deployment: only
+# Jenkins succeeding triggers .github/workflows/cd.yml. This workflow does
+# not deploy anything.
+
 on:
   push:
     branches: ['**']

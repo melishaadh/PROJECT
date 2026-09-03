@@ -107,6 +107,13 @@ An Apache alternative to nginx is provided at [`deploy/apache/`](deploy/apache) 
 
 ## Kubernetes (Minikube)
 
+> **This is a local/learning deployment path, not production.** TrekEasy's
+> real production environment is [AWS ECS Fargate](#aws-ecs-on-fargate) —
+> plain Docker containers, no Kubernetes involved. The Kubernetes setup below
+> (and the K3s variant after it) exists so the same application can be run
+> and studied on a local cluster; it is never deployed to AWS EKS or any
+> other Kubernetes service.
+
 ```bash
 # 1. Build the images into Minikube's own Docker daemon
 eval $(minikube docker-env)
@@ -192,9 +199,24 @@ in [`backend/Dockerfile`](backend/Dockerfile). JWT keys and the DocumentDB
 connection string live in Secrets Manager and are injected into the task
 definition; nothing AWS-specific is stored in this repo.
 
-This repo does **not** provision that infrastructure — the cluster, service,
-ECR repos, DocumentDB cluster and IAM roles already exist and are managed
-outside it. `aws/scripts/` only ships new versions onto them:
+Traffic reaches the service through an existing **Application Load Balancer
+(ALB)**, which plays the same role in production that the `nginx` container
+plays in Docker Compose — it is the single public entry point, and forwards
+every request into the Fargate task:
+
+```text
+Browser
+   ↓
+ALB (public entry point)
+   ↓
+ECS Fargate task — nginx (:80) → backend (:3001) / frontend (:8080)
+   ↓
+DocumentDB (MongoDB-compatible, TLS)
+```
+
+This repo does **not** provision that infrastructure — the ALB, cluster,
+service, ECR repos, DocumentDB cluster and IAM roles already exist and are
+managed outside it. `aws/scripts/` only ships new versions onto them:
 
 ```bash
 export AWS_REGION=ap-south-1
@@ -254,6 +276,38 @@ Slack
 | **AWS ECR** | Production image registry — what ECS Fargate actually pulls from |
 | **AWS ECS Fargate** | Production runtime |
 | **Slack** | Deployment notifications |
+
+### Docker images
+
+Docker packages each service as a self-contained image — the app plus
+everything it needs to run, so it behaves the same on a laptop, in Jenkins,
+and in production. TrekEasy builds five images total, each from its own
+Dockerfile:
+
+| Image | Built from | Used by |
+|---|---|---|
+| `trekeasy-backend` | [`backend/Dockerfile`](backend/Dockerfile) | Docker Compose, Kubernetes, ECS |
+| `trekeasy-frontend` | [`frontend/Dockerfile`](frontend/Dockerfile) | Docker Compose, Kubernetes, ECS |
+| `trekeasy-database` | [`backend-database/Dockerfile`](backend-database/Dockerfile) | Docker Compose, Kubernetes (local MongoDB only — ECS uses DocumentDB instead) |
+| `trekeasy-nginx` (Compose) | [`deploy/nginx/Dockerfile`](deploy/nginx/Dockerfile) | Docker Compose only |
+| `trekeasy-nginx` (ECS) | [`deploy/nginx-ecs/Dockerfile`](deploy/nginx-ecs/Dockerfile) | ECS Fargate only — see [why it's a separate image](#aws-ecs-on-fargate) |
+
+CD only ever builds the backend, frontend, and ECS nginx image — the ones
+that actually run in production.
+
+### How the DevOps files fit together
+
+| File / folder | Role |
+|---|---|
+| `Jenkinsfile` | CI — runs on every push, triggers CD on success |
+| `.github/workflows/ci.yml` | A second, independent CI check (all branches/PRs) — does not deploy |
+| `.github/workflows/cd.yml` | CD — only runs when Jenkins dispatches it |
+| `aws/scripts/build-and-push.sh` | Called by CD — builds the 3 production images, pushes to Docker Hub + ECR |
+| `aws/scripts/deploy.sh` | Called by CD — rolls the ECS service onto the new images |
+| `deploy/nginx/`, `deploy/nginx-ecs/` | Reverse-proxy images for Docker Compose and ECS respectively (not interchangeable — see below) |
+| `deploy/apache/` | Optional alternative to nginx, for on-prem hosting |
+| `docker-compose.yml` | Runs the whole stack locally with plain Docker |
+| `k8s/`, `k8s/k3s/`, `scripts/` | Kubernetes manifests and helper scripts — a local/learning alternative, not production (see [Kubernetes](#kubernetes-minikube)) |
 
 ### Jenkins CI (`Jenkinsfile`)
 
@@ -373,9 +427,3 @@ docker-compose.yml
 | `GET` | `/api/health` | used by every health/readiness check in this repo |
 
 Account deletion also has a UI trigger: **Profile → Danger Zone → Delete Account**.
-
-
-
-
-webhook-final-test-1788425140
-poll test 1788425399

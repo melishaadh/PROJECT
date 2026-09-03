@@ -257,3 +257,4 @@ docker-compose.yml
 | `GET` | `/api/health` | used by every health/readiness check in this repo |
 
 Account deletion also has a UI trigger: **Profile → Danger Zone → Delete Account**.
+

@@ -151,6 +151,34 @@ kubectl rollout status deployment/backend -n myapp
 kubectl rollout undo deployment/backend -n myapp   # revert if something's wrong
 ```
 
+### Kubernetes (K3s + Traefik)
+
+An alternative to Minikube for a host already running K3s (see
+[`k8s/k3s/README.md`](k8s/k3s/README.md) for why K3s needs its own port and
+Ingress overlay alongside the Minikube manifests above — nothing in `k8s/*.yaml`
+is changed by it). `scripts/` wraps that workflow in three read-only-by-default
+Bash scripts, all using `sudo k3s kubectl` and none of them hard-coding a pod
+name:
+
+| Script | Purpose |
+|---|---|
+| [`scripts/verify-k8s.sh`](scripts/verify-k8s.sh) | Read-only health check: node status, `myapp` namespace, backend/frontend/Mongo Deployments+Services+endpoints, the backend HPA, the Traefik controller in `kube-system`, and the `k8s/k3s/ingress-traefik.yaml` Ingress. Prints a ✓/✗ line per check and exits non-zero if anything fails. |
+| [`scripts/deploy-k8s.sh`](scripts/deploy-k8s.sh) | Applies the existing manifests in dependency order — namespace → config/secret → Mongo (PVC+Deployment+Service) → backend (Deployment+Service+HPA) → frontend (Deployment+Service) → the existing Traefik Ingress (`k8s/k3s/ingress-traefik.yaml`) — waiting for each Deployment's rollout to finish before moving on. Never applies `k8s/ingress.yaml` (the Minikube/nginx-class Ingress, inert under Traefik) and never touches `k8s/k3s/traefik-port.yaml` (one-time host-level Traefik port setup, see the K3s README). |
+| [`scripts/cleanup-k8s.sh`](scripts/cleanup-k8s.sh) | Removes only the application resources the deploy script creates (Ingress, Deployments, Services, HPA, config/secret) from `myapp`. **Preserves `mongo-pvc` (the MongoDB data) and the `myapp` namespace by default.** Pass `--delete-data` to also delete the PVC — this prompts for a typed confirmation (`delete mongo-pvc`) before doing so. Never touches K3s itself, the Traefik controller, Docker/Compose state, or any other namespace. |
+
+```bash
+# Assumes K3s is already installed and k8s/k3s/traefik-port.yaml has already
+# been applied once per k8s/k3s/README.md (moves Traefik off host :80 so
+# Docker Compose can keep it).
+
+./scripts/deploy-k8s.sh      # apply everything, wait for rollouts
+./scripts/verify-k8s.sh      # confirm cluster/app/Ingress health
+
+# ...later, to tear the app down again:
+./scripts/cleanup-k8s.sh                 # keeps MongoDB data (mongo-pvc)
+./scripts/cleanup-k8s.sh --delete-data   # also wipes MongoDB data, after confirmation
+```
+
 ---
 
 ## AWS ECS on Fargate
@@ -210,6 +238,7 @@ deploy/nginx/         Reverse-proxy image + config for Docker Compose
 deploy/nginx-ecs/     Reverse-proxy image + config for AWS ECS/Fargate (different upstream addressing)
 deploy/apache/        Optional Apache alternative to nginx
 k8s/                  Kubernetes manifests (Minikube), plus k8s/k3s/ (additive K3s/Traefik overlay)
+scripts/              verify-k8s.sh / deploy-k8s.sh / cleanup-k8s.sh — the K3s + Traefik workflow
 aws/                  Scripts that deploy to the existing ECS Fargate service (no infra provisioning)
 docs/                 TREKEASY_DEVOPS_DOCUMENTATION.md, TREKEASY_INTERVIEW_PREPARATION.md, TREKEASY_ARCHITECTURE_AUDIT.md, DEVOPS_OVERVIEW.md, RUNBOOK.md
 .github/workflows/    CI and CD

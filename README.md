@@ -172,23 +172,29 @@ outside it. `aws/scripts/` only ships new versions onto them:
 export AWS_REGION=ap-south-1
 TAG=$(git rev-parse --short HEAD)
 
-./aws/scripts/build-and-push.sh "$TAG"   # 3 images -> ECR, tagged with the git SHA
+./aws/scripts/build-and-push.sh "$TAG"   # 3 images -> ECR AND Docker Hub (mirror), tagged with the git SHA
 ./aws/scripts/deploy.sh "$TAG"           # new task-def revision + rolling update, waits for stable
 ```
 
-Full day-2 operations guide (logs, scaling, secret rotation, GitHub OIDC
-setup): [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
-Architecture and DevOps concepts explained: [`docs/DEVOPS_OVERVIEW.md`](docs/DEVOPS_OVERVIEW.md).
-`aws/` layout and commands: [`aws/README.md`](aws/README.md).
+The reverse-proxy image built for AWS comes from
+[`deploy/nginx-ecs/`](deploy/nginx-ecs), not [`deploy/nginx/`](deploy/nginx) —
+the two talk to the backend/frontend containers differently (Docker Compose
+service names vs. `127.0.0.1`, since a Fargate task shares one network
+namespace) and are not interchangeable.
+
+Full documentation: [`docs/TREKEASY_DEVOPS_DOCUMENTATION.md`](docs/TREKEASY_DEVOPS_DOCUMENTATION.md)
+(architecture, Docker, Nginx, Kubernetes, Jenkins, GitHub Actions, AWS, security,
+troubleshooting) and [`docs/TREKEASY_INTERVIEW_PREPARATION.md`](docs/TREKEASY_INTERVIEW_PREPARATION.md).
+Older, still-accurate deep dives: [`docs/DEVOPS_OVERVIEW.md`](docs/DEVOPS_OVERVIEW.md) and [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
 ---
 
 ## CI/CD
 
 - **`.github/workflows/ci.yml`** — runs on every push and on PRs into `main`: lint, typecheck, test, build, for both services across Node 18 and 20, with build artifacts uploaded.
-- **`.github/workflows/cd.yml`** — runs on push to `main` (or manually via *Run workflow*): re-runs tests, then builds the three images, pushes them to **ECR**, and rolls the existing `trekeasy-service` ECS Fargate service onto the new tag (`aws/scripts/build-and-push.sh` + `deploy.sh`), then posts a success/failure message to **#trekeasy** in Slack if `SLACK_WEBHOOK_URL` is set.
+- **`.github/workflows/cd.yml`** — runs on push to `main` (or manually via *Run workflow*): re-runs tests, then builds each of the three images **once** and pushes it to both **ECR** (what ECS pulls) and a **Docker Hub** mirror, then rolls the existing `trekeasy-service` ECS Fargate service onto the new tag (`aws/scripts/build-and-push.sh` + `deploy.sh`), then posts a success/failure message to **#trekeasy** in Slack if `SLACK_WEBHOOK_URL` is set.
 
-  Required repo config (**Settings → Secrets and variables → Actions**): secret `AWS_DEPLOY_ROLE_ARN` (an IAM role trusted via GitHub OIDC — see `docs/RUNBOOK.md` §4.2) and variable `AWS_REGION` = `ap-south-1`. `SLACK_WEBHOOK_URL` is an optional secret. No AWS keys are stored.
+  Required repo config (**Settings → Secrets and variables → Actions**): secrets `AWS_DEPLOY_ROLE_ARN` (an IAM role trusted via GitHub OIDC — see `docs/RUNBOOK.md` §4.2), `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`, and variable `AWS_REGION` = `ap-south-1`. `SLACK_WEBHOOK_URL` is an optional secret. No AWS keys are stored.
 
 - **`Jenkinsfile`** — an equivalent pipeline (`Checkout` → `Build` → `Test` → `Archive`) for a Jenkins-hosted setup, with a Node 20 tool named `node20` expected to be configured in Jenkins.
 
@@ -200,10 +206,12 @@ Architecture and DevOps concepts explained: [`docs/DEVOPS_OVERVIEW.md`](docs/DEV
 frontend/            Expo app — screens/, components/, lib/, context/
 backend/              NestJS API — src/modules/{auth,users,destinations,chat,...}
 backend-database/     Mongoose schemas + config, imported by backend/ via @db/*
-deploy/               nginx.conf, Apache vhost + .htaccess
-k8s/                  Kubernetes manifests (Minikube)
+deploy/nginx/         Reverse-proxy image + config for Docker Compose
+deploy/nginx-ecs/     Reverse-proxy image + config for AWS ECS/Fargate (different upstream addressing)
+deploy/apache/        Optional Apache alternative to nginx
+k8s/                  Kubernetes manifests (Minikube), plus k8s/k3s/ (additive K3s/Traefik overlay)
 aws/                  Scripts that deploy to the existing ECS Fargate service (no infra provisioning)
-docs/                 DEVOPS_OVERVIEW.md, RUNBOOK.md
+docs/                 TREKEASY_DEVOPS_DOCUMENTATION.md, TREKEASY_INTERVIEW_PREPARATION.md, TREKEASY_ARCHITECTURE_AUDIT.md, DEVOPS_OVERVIEW.md, RUNBOOK.md
 .github/workflows/    CI and CD
 Jenkinsfile
 docker-compose.yml

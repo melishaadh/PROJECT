@@ -1,96 +1,50 @@
 #!/usr/bin/env bash
-# Deploy TrekEasy onto the existing K3s + Traefik cluster.
-#
-# Applies the manifests already committed under k8s/ (this script creates no
-# new resources of its own) in dependency order, then waits for each
-# Deployment to become ready before moving on:
-#
-#   namespace -> config/secret -> Mongo (PVC+Deployment+Service)
-#     -> backend (Deployment+Service+HPA) -> frontend (Deployment+Service)
-#     -> the existing k3s Traefik Ingress (k8s/k3s/ingress-traefik.yaml)
-#
-# Does NOT apply k8s/ingress.yaml (the nginx-class Ingress for Minikube) —
-# on K3s that IngressClass is never claimed by Traefik, so it would sit
-# inert. Does NOT touch k8s/k3s/traefik-port.yaml either: that HelmChartConfig
-# is one-time host-level Traefik setup (see k8s/k3s/README.md), not part of
-# the application rollout.
-#
-# Usage:
-#   ./scripts/deploy-k8s.sh
-#
-# Optional env:
-#   ROLLOUT_TIMEOUT   passed to `kubectl rollout status --timeout` (default 180s)
 
-set -euo pipefail
+set -e
 
-KUBECTL=(sudo k3s kubectl)
-NAMESPACE="myapp"
-ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-180s}"
+echo "Deploying TrekEasy to Kubernetes..."
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-K8S_DIR="$REPO_ROOT/k8s"
+echo "1. Creating namespace..."
+sudo k3s kubectl apply -f k8s/namespace.yaml
 
-kc() { "${KUBECTL[@]}" "$@"; }
+echo "2. Applying configuration..."
+sudo k3s kubectl apply -f k8s/app-config.yaml
+sudo k3s kubectl apply -f k8s/db-secret.yaml
 
-require_manifest() {
-  if [ ! -f "$1" ]; then
-    echo "error: expected manifest not found: $1" >&2
-    exit 1
-  fi
-}
+echo "3. Deploying MongoDB..."
+sudo k3s kubectl apply -f k8s/mongo-pvc.yaml
+sudo k3s kubectl apply -f k8s/mongo-deployment.yaml
+sudo k3s kubectl apply -f k8s/mongo-service.yaml
 
-apply() {
-  local manifest="$1"
-  require_manifest "$manifest"
-  echo "==> Applying ${manifest#"$REPO_ROOT"/}"
-  kc apply -f "$manifest"
-}
+echo "4. Deploying backend..."
+sudo k3s kubectl apply -f k8s/backend-deployment.yaml
+sudo k3s kubectl apply -f k8s/backend-service.yaml
+sudo k3s kubectl apply -f k8s/backend-hpa.yaml
 
-wait_for_deployment() {
-  local name="$1"
-  echo "==> Waiting for deployment/$name to be ready (timeout ${ROLLOUT_TIMEOUT})"
-  if ! kc rollout status "deployment/$name" -n "$NAMESPACE" --timeout="$ROLLOUT_TIMEOUT"; then
-    echo "error: deployment/$name did not become ready in time." >&2
-    echo "       Inspect it with: sudo k3s kubectl describe deployment/$name -n $NAMESPACE" >&2
-    exit 1
-  fi
-}
+echo "5. Deploying frontend..."
+sudo k3s kubectl apply -f k8s/frontend-deployment.yaml
+sudo k3s kubectl apply -f k8s/frontend-service.yaml
 
-echo "==> Step 1/6: Namespace"
-apply "$K8S_DIR/namespace.yaml"
+echo "6. Applying Traefik Ingress..."
+sudo k3s kubectl apply -f k8s/k3s/ingress-traefik.yaml
 
 echo
-echo "==> Step 2/6: Backend config/secret (required by the backend Deployment)"
-apply "$K8S_DIR/app-config.yaml"
-apply "$K8S_DIR/db-secret.yaml"
+echo "Waiting for deployments..."
+
+sudo k3s kubectl rollout status deployment/mongo -n myapp --timeout=180s
+sudo k3s kubectl rollout status deployment/backend -n myapp --timeout=180s
+sudo k3s kubectl rollout status deployment/frontend -n myapp --timeout=180s
 
 echo
-echo "==> Step 3/6: Mongo (PVC + Deployment + Service)"
-apply "$K8S_DIR/mongo-pvc.yaml"
-apply "$K8S_DIR/mongo-deployment.yaml"
-apply "$K8S_DIR/mongo-service.yaml"
-wait_for_deployment "mongo"
+echo "TrekEasy deployment complete!"
+echo
+echo "Pods:"
+sudo k3s kubectl get pods -n myapp
 
 echo
-echo "==> Step 4/6: Backend (Deployment + Service + HPA)"
-apply "$K8S_DIR/backend-deployment.yaml"
-apply "$K8S_DIR/backend-service.yaml"
-apply "$K8S_DIR/backend-hpa.yaml"
-wait_for_deployment "backend"
+echo "Services:"
+sudo k3s kubectl get svc -n myapp
 
 echo
-echo "==> Step 5/6: Frontend (Deployment + Service)"
-apply "$K8S_DIR/frontend-deployment.yaml"
-apply "$K8S_DIR/frontend-service.yaml"
-wait_for_deployment "frontend"
-
-echo
-echo "==> Step 6/6: Existing Traefik Ingress"
-apply "$K8S_DIR/k3s/ingress-traefik.yaml"
-
-echo
-echo "==> Deploy complete. Current state:"
-kc get deployments,svc,hpa,ingress -n "$NAMESPACE"
-
-echo
-echo "==> Run ./scripts/verify-k8s.sh for a full health check."
+echo "Ingress:"
+sudo k3s kubectl get ingress -n myapp

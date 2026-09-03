@@ -1,6 +1,6 @@
 # TrekEasy
 
-A trek-discovery app for the Himalayas: personalized recommendations, live trending, and group chat per expedition.
+A trek-discovery app.
 
 Three independent services:
 

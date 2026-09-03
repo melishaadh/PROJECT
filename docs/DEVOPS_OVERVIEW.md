@@ -47,7 +47,7 @@ scaled, deployed, and reasoned about independently.
 | [`backend-database/`](../backend-database) | 2↔3 | Mongoose **schemas** + DB/JWT config. Not a running server — it compiles *into* the backend image. MongoDB is the actual tier-3 service. |
 | [`deploy/`](../deploy) | — | `nginx/` reverse-proxy config, `apache/` alternative |
 | [`k8s/`](../k8s) | — | Kubernetes manifests (Minikube) |
-| [`aws/`](../aws) | — | **ECS on Fargate** — CloudFormation + task definitions + scripts |
+| [`aws/`](../aws) | — | **ECS on Fargate** — scripts that ship new versions onto the already-running cluster/service |
 | [`.github/workflows/`](../.github/workflows) | — | GitHub Actions CI and CD |
 | [`Jenkinsfile`](../Jenkinsfile) | — | Equivalent pipeline for a Jenkins server |
 | [`docker-compose.yml`](../docker-compose.yml) | — | Run all four containers locally with one command |
@@ -63,18 +63,21 @@ no CORS headaches, and the same image works in every environment.
 
 ### Standardized names
 
-One naming scheme everywhere — Compose, Kubernetes, and AWS:
+One naming scheme for frontend/backend everywhere — Compose, Kubernetes, and
+AWS:
 
 | Tier | Image | Container / task | Network name |
 |---|---|---|---|
 | frontend | `trekeasy-frontend` | `trekeasy-frontend` | `frontend` |
 | backend | `trekeasy-backend` | `trekeasy-backend` | `backend` |
-| database | `trekeasy-database` | `trekeasy-database` | `mongo` |
+| database (Compose / K8s only) | `trekeasy-database` | `trekeasy-database` | `mongo` |
 
-The database's *network name* stays `mongo` on purpose — it is hard-coded into
-the connection string `mongodb://mongo:27017/trekeasy` in several places
-(Compose, `k8s/db-secret.yaml`, AWS Cloud Map). Renaming a load-bearing
-hostname buys nothing; the **image** and **container** names carry the brand.
+The database's *network name* stays `mongo` on purpose in Compose and
+Kubernetes — it is hard-coded into the connection string
+`mongodb://mongo:27017/trekeasy` in both places (Compose, `k8s/db-secret.yaml`).
+Renaming a load-bearing hostname buys nothing; the **image** and **container**
+names carry the brand. AWS has no `trekeasy-database` container at all — the
+database tier there is the managed **Amazon DocumentDB** service (see §5b).
 
 ---
 
@@ -140,10 +143,9 @@ internal service should handle each request. Benefits:
 | `/uploads/…` | `backend:3001` | locally-stored images, served *outside* the `/api` prefix |
 | `/` (everything else) | `frontend:8080` | the Expo web bundle |
 
-**The exact same four rules appear in `k8s/ingress.yaml` and in the AWS ALB
-listener rules** (`aws/cloudformation/02-platform.yaml`). nginx, the Kubernetes
-Ingress, and the ALB are three implementations of one idea: *single front
-door, route by path*.
+**The exact same four rules appear in `k8s/ingress.yaml` and in the AWS ALB's
+listener rules.** nginx, the Kubernetes Ingress, and the ALB are three
+implementations of one idea: *single front door, route by path*.
 
 ---
 
@@ -176,14 +178,22 @@ Runs on **push to `main`** (or manually, choosing `staging`/`production`):
 test  ─┐
        ├─ deploy:
        │    1. assume an AWS IAM role via OIDC (no long-lived keys)
-       │    2. docker login to ECR
-       │    3. aws/scripts/build-and-push.sh  → 3 images to ECR, tagged with the git SHA
-       │    4. aws/scripts/deploy.sh          → new task-def revisions + rolling update
-       └─   5. post the result to Slack (#trekeasy)
+       │    2. aws/scripts/build-and-push.sh  → logs in to ECR, builds the 3
+       │                                        images, pushes each tagged
+       │                                        with the git SHA
+       │    3. aws/scripts/deploy.sh          → reads the task definition
+       │                                        currently on trekeasy-service,
+       │                                        swaps in the new image tags,
+       │                                        registers a new revision,
+       │                                        updates the service, waits
+       │                                        for it to stabilize
+       └─   4. post the result to Slack (#trekeasy), if configured
 ```
 
-Deployment secrets/vars live in **GitHub → Settings → Secrets and variables →
-Actions** — never in the repo. See `RUNBOOK.md` §4.
+This ships a new version onto the cluster/service that already exists — it
+does not create or reconfigure any AWS resource. Deployment secrets/vars live
+in **GitHub → Settings → Secrets and variables → Actions** — never in the
+repo. See `RUNBOOK.md` §4.
 
 ### 4c. Jenkins ([`Jenkinsfile`](../Jenkinsfile))
 
@@ -245,44 +255,39 @@ Pods; an **Ingress** exposes Services to the outside world by hostname/path.
 "serverless" mode: you never create or patch EC2 servers — you hand AWS a task
 definition and it finds capacity to run it. `launchType: FARGATE` throughout.
 
+The cluster, service, ECR repositories, DocumentDB cluster, IAM roles,
+networking and Secrets Manager secrets **already exist** — they were created
+and are changed outside this repository (console / by hand), not by anything
+under `aws/`. This repo only ships new application versions onto them (see
+§4b above and [`aws/README.md`](../aws/README.md)); it does not provision,
+resize, or tear down any of it, and there is no CloudFormation here.
+
 ECS vocabulary mapped to Kubernetes:
 
 | ECS | ≈ Kubernetes | TrekEasy |
 |---|---|---|
-| **Task definition** | Pod spec | one per tier — image, CPU/memory, ports, env, secrets, health check, log config, volumes |
+| **Task definition** | Pod spec | image, CPU/memory, ports, env, secrets, health check, log config for the containers running on `trekeasy-service` |
 | **Task** | Pod | one running copy of a task definition |
-| **Service** | Deployment | keeps *N* tasks alive, does rolling updates, registers them with the load balancer |
-| **Cluster** | (the cluster) | `trekeasy-cluster` — just a namespace for services |
-| **Cloud Map** | kube-dns / Service | private DNS: `mongo.trekeasy.local` → the database task's IP |
+| **Service** | Deployment | `trekeasy-service` — keeps the desired count of tasks alive, does rolling updates, registers them with the load balancer |
+| **Cluster** | (the cluster) | `trekeasy-cluster` — just a namespace for the service |
 | **ALB + target groups** | Ingress | single front door, path routing |
-| **EFS volume** | PersistentVolumeClaim | durable `/data/db` for Mongo, `/uploads` for the backend |
-| **Secrets Manager** | Secret | JWT keys, injected as env vars at task start |
-| **Task execution role** | — | lets the ECS agent pull images / read secrets / write logs |
-| **Task role** | ServiceAccount (IRSA) | permissions for the app code itself (empty here — TrekEasy calls no AWS APIs) |
+| **Secrets Manager** | Secret | JWT keys and the DocumentDB connection string, injected into the task definition as container secrets |
+| **Task execution role** | — | lets the ECS agent pull images from ECR / read secrets / write logs |
+| **Task role** | ServiceAccount (IRSA) | permissions for the app code itself |
 
-The three CloudFormation stacks:
+The database tier is **Amazon DocumentDB**, a managed service — not a
+container TrekEasy runs itself. The backend connects to it over TLS using
+Amazon's CA bundle (fetched at image build time in
+[`backend/Dockerfile`](../backend/Dockerfile); see the `MONGODB_URI`
+`tlsCAFile` parameter), the same driver code path as the local/Compose/K8s
+Mongo connection.
 
-```
-01-network.yaml   VPC, 2 Availability Zones, public subnets (ALB + NAT),
-                  private subnets (every task runs here, no public IP).
-
-02-platform.yaml  3 ECR repos · 3 CloudWatch log groups · IAM roles ·
-                  4 security groups (ALB→app→db→EFS, least privilege) ·
-                  internet-facing ALB with the /api,/uploads,/socket.io rules ·
-                  encrypted EFS file system + access points ·
-                  Cloud Map namespace "trekeasy.local" ·
-                  Secrets Manager secret "trekeasy/jwt".
-
-03-services.yaml  ECS cluster · backend/frontend/database task definitions
-                  (FARGATE) · the 3 services wired to the ALB target groups
-                  and Cloud Map.
-```
-
-**Network security posture:** the ALB is the only thing with a public IP.
-Backend and frontend tasks accept traffic **only from the ALB's security
-group**; the database accepts traffic **only from the backend's security
-group**; EFS accepts NFS **only from backend + database**. Outbound internet
-(for pulling images, Cloudinary, etc.) goes through the NAT Gateway.
+`aws/scripts/deploy.sh` never needs to know the task definition's roles,
+secrets, subnets, or security groups: it reads whatever is *currently*
+registered on `trekeasy-service`, replaces only the image tags for the
+`trekeasy-backend` / `trekeasy-frontend` / `trekeasy-nginx` containers, and
+registers that as a new revision. Everything else about the task carries
+forward unchanged.
 
 ---
 

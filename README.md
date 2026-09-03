@@ -155,21 +155,29 @@ kubectl rollout undo deployment/backend -n myapp   # revert if something's wrong
 
 ## AWS ECS on Fargate
 
-Production target. Three CloudFormation stacks (network → platform → services)
-put the tasks in private subnets behind an internet-facing ALB, with MongoDB on
-an EFS volume and JWT keys in Secrets Manager. `launchType: FARGATE` throughout.
+Production target, and already running — region `ap-south-1`, cluster
+`trekeasy-cluster`, service `trekeasy-service`, three ECR repositories
+(`trekeasy-backend`, `trekeasy-frontend`, `trekeasy-nginx`), `launchType:
+FARGATE`. The database is Amazon DocumentDB (not a self-hosted Mongo
+container) — the backend connects to it over TLS using the CA bundle fetched
+in [`backend/Dockerfile`](backend/Dockerfile). JWT keys and the DocumentDB
+connection string live in Secrets Manager and are injected into the task
+definition; nothing AWS-specific is stored in this repo.
+
+This repo does **not** provision that infrastructure — the cluster, service,
+ECR repos, DocumentDB cluster and IAM roles already exist and are managed
+outside it. `aws/scripts/` only ships new versions onto them:
 
 ```bash
-export AWS_REGION=us-east-1
-export JWT_SECRET=$(openssl rand -hex 32)
-export JWT_REFRESH_SECRET=$(openssl rand -hex 32)
+export AWS_REGION=ap-south-1
+TAG=$(git rev-parse --short HEAD)
 
-./aws/scripts/provision.sh                               # VPC, ALB, ECR, EFS, IAM
-./aws/scripts/build-and-push.sh                          # 3 images -> ECR
-./aws/scripts/provision.sh $(git rev-parse --short HEAD) # ECS cluster + services
+./aws/scripts/build-and-push.sh "$TAG"   # 3 images -> ECR, tagged with the git SHA
+./aws/scripts/deploy.sh "$TAG"           # new task-def revision + rolling update, waits for stable
 ```
 
-Full walkthrough incl. the manual IAM/console steps: [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
+Full day-2 operations guide (logs, scaling, secret rotation, GitHub OIDC
+setup): [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 Architecture and DevOps concepts explained: [`docs/DEVOPS_OVERVIEW.md`](docs/DEVOPS_OVERVIEW.md).
 `aws/` layout and commands: [`aws/README.md`](aws/README.md).
 
@@ -178,9 +186,9 @@ Architecture and DevOps concepts explained: [`docs/DEVOPS_OVERVIEW.md`](docs/DEV
 ## CI/CD
 
 - **`.github/workflows/ci.yml`** — runs on every push and on PRs into `main`: lint, typecheck, test, build, for both services across Node 18 and 20, with build artifacts uploaded.
-- **`.github/workflows/cd.yml`** — runs on push to `main` (or manually via *Run workflow* with a `staging`/`production` choice): re-runs tests, then builds the three images, pushes them to **ECR**, and rolls the ECS Fargate services onto the new tag (`aws/scripts/build-and-push.sh` + `deploy.sh`), then posts a success/failure message to **#trekeasy** in Slack.
+- **`.github/workflows/cd.yml`** — runs on push to `main` (or manually via *Run workflow*): re-runs tests, then builds the three images, pushes them to **ECR**, and rolls the existing `trekeasy-service` ECS Fargate service onto the new tag (`aws/scripts/build-and-push.sh` + `deploy.sh`), then posts a success/failure message to **#trekeasy** in Slack if `SLACK_WEBHOOK_URL` is set.
 
-  Required repo config (**Settings → Secrets and variables → Actions**): secrets `AWS_DEPLOY_ROLE_ARN` (an IAM role trusted via GitHub OIDC — see `docs/RUNBOOK.md` §4.4) and `SLACK_WEBHOOK_URL`; variable `AWS_REGION`. No AWS keys are stored.
+  Required repo config (**Settings → Secrets and variables → Actions**): secret `AWS_DEPLOY_ROLE_ARN` (an IAM role trusted via GitHub OIDC — see `docs/RUNBOOK.md` §4.2) and variable `AWS_REGION` = `ap-south-1`. `SLACK_WEBHOOK_URL` is an optional secret. No AWS keys are stored.
 
 - **`Jenkinsfile`** — an equivalent pipeline (`Checkout` → `Build` → `Test` → `Archive`) for a Jenkins-hosted setup, with a Node 20 tool named `node20` expected to be configured in Jenkins.
 
@@ -194,7 +202,7 @@ backend/              NestJS API — src/modules/{auth,users,destinations,chat,.
 backend-database/     Mongoose schemas + config, imported by backend/ via @db/*
 deploy/               nginx.conf, Apache vhost + .htaccess
 k8s/                  Kubernetes manifests (Minikube)
-aws/                  ECS on Fargate — CloudFormation, task definitions, scripts
+aws/                  Scripts that deploy to the existing ECS Fargate service (no infra provisioning)
 docs/                 DEVOPS_OVERVIEW.md, RUNBOOK.md
 .github/workflows/    CI and CD
 Jenkinsfile

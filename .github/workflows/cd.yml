@@ -1,28 +1,26 @@
 name: CD
 
-# Build the three TrekEasy images, push them to ECR, and roll the ECS Fargate
-# services onto the new tag. The infrastructure itself (VPC / ALB / cluster) is
-# provisioned once with aws/scripts/provision.sh — this workflow only ships new
-# application versions onto it.
+# Test, then build the three TrekEasy images once per push to main, push
+# them to Docker Hub, push the same git-SHA tag to the existing ECR
+# repositories, and roll the existing ECS Fargate service (trekeasy-service,
+# on trekeasy-cluster) onto that tag. This workflow only ships application
+# versions — Docker Hub repos, the ECR repos, ECS cluster/service, DocumentDB
+# and IAM roles already exist and are managed outside this repo (see
+# aws/README.md).
 #
 # Required repo config (Settings -> Secrets and variables -> Actions):
-#   Secrets:  AWS_DEPLOY_ROLE_ARN   IAM role this workflow assumes via OIDC
-#             SLACK_WEBHOOK_URL     (optional) incoming webhook for #trekeasy
-#   Variables: AWS_REGION            e.g. us-east-1
+#   Secrets:   AWS_DEPLOY_ROLE_ARN   IAM role this workflow assumes via OIDC
+#              DOCKERHUB_USERNAME    Docker Hub account (melishaadh)
+#              DOCKERHUB_TOKEN       Docker Hub access token
+#              SLACK_WEBHOOK_URL     (optional) incoming webhook for #trekeasy
+#   Variables: AWS_REGION            ap-south-1
 #
 # See docs/RUNBOOK.md for the one-time OIDC provider + role setup.
 
 on:
   push:
     branches: [main]
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: Environment to deploy to
-        type: choice
-        required: true
-        default: staging
-        options: [staging, production]
+  workflow_dispatch: {}
 
 concurrency:
   group: cd-${{ github.ref }}
@@ -57,17 +55,21 @@ jobs:
           npm run typecheck
 
   deploy:
-    name: Deploy (${{ github.event.inputs.environment || 'staging' }})
+    name: Deploy
     needs: test
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
-    environment: ${{ github.event.inputs.environment || 'staging' }}
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
-      PROJECT_NAME: trekeasy
       IMAGE_TAG: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v5
+
+      - name: Build & push images to Docker Hub
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: ./aws/scripts/build-and-push-dockerhub.sh "$IMAGE_TAG"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -75,25 +77,48 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Login to Amazon ECR
-        id: ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build & push images
+      - name: Build & push images to ECR
         run: ./aws/scripts/build-and-push.sh "$IMAGE_TAG"
 
-      - name: Roll ECS services
+      - name: Roll ECS service
         run: ./aws/scripts/deploy.sh "$IMAGE_TAG"
 
+  notify:
+    name: Notify Slack
+    needs: [test, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
       - name: Notify Slack
-        if: always()
-        uses: slackapi/slack-github-action@v1.27.0
-        with:
-          payload: |
-            {
-              "channel": "#trekeasy",
-              "text": "${{ job.status == 'success' && ':white_check_mark: Deploy succeeded' || ':x: Deploy failed' }} — ${{ github.repository }}@${{ github.sha }} (${{ github.event.inputs.environment || 'staging' }})"
-            }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+          STATUS_OK: ${{ needs.test.result == 'success' && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped') }}
+          REPO: melishaadh/trekeasy
+          BRANCH: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+          AUTHOR: ${{ github.event.head_commit.author.name || github.actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "SLACK_WEBHOOK_URL not set, skipping notification"
+            exit 0
+          fi
+
+          if [ "$STATUS_OK" = "true" ]; then
+            STATUS_TEXT=":white_check_mark: CI/CD succeeded"
+          else
+            STATUS_TEXT=":x: CI/CD failed"
+          fi
+
+          payload="$(jq -n \
+            --arg text "$STATUS_TEXT" \
+            --arg repo "$REPO" \
+            --arg branch "$BRANCH" \
+            --arg commit "$COMMIT" \
+            --arg author "$AUTHOR" \
+            --arg run_url "$RUN_URL" \
+            '{text: "\($text)\nRepo: \($repo)\nBranch: \($branch)\nCommit: \($commit)\nAuthor: \($author)\nRun: \($run_url)"}')"
+
+          curl -sf -X POST -H 'Content-type: application/json' \
+            --data "$payload" \
+            "$SLACK_WEBHOOK_URL"

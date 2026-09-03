@@ -16,7 +16,11 @@ WORKDIR /app/backend
 COPY backend/package.json backend/package-lock.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/backend/dist ./dist
-COPY backend/global-bundle.pem ./global-bundle.pem
+# DocumentDB requires TLS with Amazon's CA bundle (MONGODB_URI carries
+# ?tls=true&tlsCAFile=global-bundle.pem, resolved relative to this WORKDIR).
+# Fetched at build time (public file, not a secret) instead of committed,
+# since it is gitignored (*.pem) and was never present in a fresh checkout.
+RUN wget -q -O global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
 
 EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \

@@ -1,0 +1,15 @@
+.git
+**/node_modules
+**/dist
+**/coverage
+**/*.tsbuildinfo
+**/.expo
+**/web-build
+**/android
+**/ios
+**/artifacts
+.env
+.env.*
+*.log
+k8s
+docs

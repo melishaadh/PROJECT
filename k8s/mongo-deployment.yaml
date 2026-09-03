@@ -1,8 +1,3 @@
-# Build the image first: eval $(minikube docker-env) &&
-#   docker build -f backend-database/Dockerfile -t trekeasy-database:latest backend-database
-#
-# The Deployment/pod label and Service stay named "mongo" — that hostname is
-# baked into MONGODB_URI (k8s/db-secret.yaml). Only the image name changed.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -11,7 +6,7 @@ metadata:
 spec:
   replicas: 1
   strategy:
-    type: Recreate # avoids two pods sharing one ReadWriteOnce volume
+    type: Recreate
   selector:
     matchLabels:
       app: mongo
@@ -33,12 +28,23 @@ spec:
             - name: mongo-storage
               mountPath: /data/db
           resources:
-            requests: { cpu: 250m, memory: 256Mi }
-            limits: { cpu: 500m, memory: 512Mi }
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
           readinessProbe:
             exec:
-              command: ['mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
+              command:
+                - mongosh
+                - --quiet
+                - --eval
+                - "db.adminCommand('ping').ok"
             initialDelaySeconds: 10
+            timeoutSeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
       volumes:
         - name: mongo-storage
           persistentVolumeClaim:

@@ -39,3 +39,4 @@ backend/uploads/
 .DS_Store
 Thumbs.db
 *.pem
+trekeasy-k8s-images.tar

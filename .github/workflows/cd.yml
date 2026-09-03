@@ -1,12 +1,27 @@
 name: CD
 
-# Test, then build the three TrekEasy images ONCE each per push to main and
-# push the same immutable git-SHA tag to both Docker Hub (secondary/mirror
-# registry) and the existing ECR repositories, then roll the existing ECS
-# Fargate service (trekeasy-service, on trekeasy-cluster) onto that ECR
-# tag. This workflow only ships application versions — Docker Hub repos,
-# the ECR repos, ECS cluster/service, DocumentDB and IAM roles already
-# exist and are managed outside this repo.
+# Deploys TrekEasy after Jenkins CI has already tested and approved a commit.
+#
+# Trigger: Jenkins (see Jenkinsfile, stage "Trigger GitHub Actions CD") calls
+# the GitHub REST API to dispatch this workflow only after all Jenkins CI
+# stages succeed:
+#   POST /repos/melishaadh/PROJECT/actions/workflows/cd.yml/dispatches
+#   { "ref": "main", "inputs": { "commit_sha": "<jenkins-tested-sha>" } }
+#
+# This workflow does NOT run automatically on push — Jenkins CI is the gate.
+# If Jenkins CI fails, it never calls the dispatch endpoint, so this workflow
+# never starts.
+#
+# It checks out the exact commit Jenkins tested (inputs.commit_sha) and tags
+# every image with that same SHA, so the commit Jenkins approved is the exact
+# commit that reaches ECS — never a newer/different HEAD on main.
+#
+# GitHub Actions here is CD only — it does not re-run Jenkins's lint/test/build
+# checks. It builds the three images ONCE each and pushes the same immutable
+# tag to Docker Hub (secondary/mirror) and the existing ECR repos, then rolls
+# the existing ECS Fargate service (trekeasy-service, on trekeasy-cluster)
+# onto that tag. Docker Hub repos, ECR repos, the ECS cluster/service,
+# DocumentDB and IAM roles all already exist and are managed outside this repo.
 #
 # Registry auth is handled entirely by official actions (no docker login
 # inside aws/scripts/build-and-push.sh):
@@ -21,15 +36,22 @@ name: CD
 #              SLACK_WEBHOOK_URL     (optional) incoming webhook for #trekeasy
 #   Variables: AWS_REGION            ap-south-1
 #
+# Jenkins side needs one more credential (stored in Jenkins, not here):
+#   github-actions-token   a GitHub PAT (repo + workflow scope) used only to
+#                          call the dispatch endpoint above.
+#
 # See docs/RUNBOOK.md for the one-time OIDC provider + role setup.
 
 on:
-  push:
-    branches: [main]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: "Commit SHA approved by Jenkins"
+        required: true
+        type: string
 
 concurrency:
-  group: cd-${{ github.ref }}
+  group: cd-deploy
   cancel-in-progress: false
 
 permissions:
@@ -37,39 +59,16 @@ permissions:
   id-token: write   # required for aws-actions/configure-aws-credentials (OIDC)
 
 jobs:
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 20.x
-
-      - name: Backend
-        working-directory: backend
-        run: |
-          npm ci
-          npm run lint
-          npm run typecheck
-          npm test
-
-      - name: Frontend
-        working-directory: frontend
-        run: |
-          npm ci
-          npm run typecheck
-
   deploy:
     name: Deploy
-    needs: test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
-      IMAGE_TAG: ${{ github.sha }}
+      IMAGE_TAG: ${{ inputs.commit_sha }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.commit_sha }}
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -97,18 +96,18 @@ jobs:
 
   notify:
     name: Notify Slack
-    needs: [test, deploy]
+    needs: deploy
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Notify Slack
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          STATUS_OK: ${{ needs.test.result == 'success' && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped') }}
-          REPO: melishaadh/trekeasy
-          BRANCH: ${{ github.ref_name }}
-          COMMIT: ${{ github.sha }}
-          AUTHOR: ${{ github.event.head_commit.author.name || github.actor }}
+          STATUS_OK: ${{ needs.deploy.result == 'success' }}
+          REPO: melishaadh/PROJECT
+          BRANCH: main
+          COMMIT: ${{ inputs.commit_sha }}
+          AUTHOR: ${{ github.actor }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [ -z "$SLACK_WEBHOOK_URL" ]; then

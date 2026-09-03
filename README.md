@@ -217,14 +217,130 @@ Older, still-accurate deep dives: [`docs/DEVOPS_OVERVIEW.md`](docs/DEVOPS_OVERVI
 
 ---
 
-## CI/CD
+## CI/CD Pipeline
 
-- **`.github/workflows/ci.yml`** — runs on every push and on PRs into `main`: lint, typecheck, test, build, for both services across Node 18 and 20, with build artifacts uploaded.
-- **`.github/workflows/cd.yml`** — runs on push to `main` (or manually via *Run workflow*): re-runs tests, then builds each of the three images **once** and pushes it to both **ECR** (what ECS pulls) and a **Docker Hub** mirror, then rolls the existing `trekeasy-service` ECS Fargate service onto the new tag (`aws/scripts/build-and-push.sh` + `deploy.sh`), then posts a success/failure message to **#trekeasy** in Slack if `SLACK_WEBHOOK_URL` is set.
+TrekEasy ships to production through **two separate tools with two separate
+jobs**: Jenkins does Continuous Integration (CI), and GitHub Actions does
+Continuous Deployment (CD). Jenkins is the gate — GitHub Actions only ever
+runs a deployment that Jenkins has already approved.
 
-  Required repo config (**Settings → Secrets and variables → Actions**): secrets `AWS_DEPLOY_ROLE_ARN` (an IAM role trusted via GitHub OIDC — see `docs/RUNBOOK.md` §4.2), `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`, and variable `AWS_REGION` = `ap-south-1`. `SLACK_WEBHOOK_URL` is an optional secret. No AWS keys are stored.
+```text
+Developer
+   ↓
+GitHub
+   ↓
+Jenkins CI
+   ↓
+SUCCESS
+   ↓
+GitHub Actions CD
+   ↓
+Docker Hub + ECR
+   ↓
+ECS Fargate
+   ↓
+Slack
+```
 
-- **`Jenkinsfile`** — an equivalent pipeline (`Checkout` → `Build` → `Test` → `Archive`) for a Jenkins-hosted setup, with a Node 20 tool named `node20` expected to be configured in Jenkins.
+**If Jenkins CI fails, deployment does not start.**
+
+### Technology stack (CI/CD & deployment)
+
+| Tool | Role |
+|---|---|
+| **Jenkins** | Continuous Integration — installs, builds, type-checks, and tests both services on every push to `main` |
+| **GitHub Actions** | Continuous Deployment — builds and ships Docker images, updates ECS, notifies Slack |
+| **Docker Hub** | Secondary / mirror image registry |
+| **AWS ECR** | Production image registry — what ECS Fargate actually pulls from |
+| **AWS ECS Fargate** | Production runtime |
+| **Slack** | Deployment notifications |
+
+### Jenkins CI (`Jenkinsfile`)
+
+Runs the existing stages, unchanged: `Checkout` → `Backend` (`npm ci`, build,
+typecheck, test) → `Frontend` (`npm ci`, build, typecheck) → `Archive`. A Node
+20 tool named `node20` is expected to be configured in Jenkins.
+
+Only after all of those succeed does a final stage, **`Trigger GitHub Actions
+CD`**, run:
+
+1. It reads the exact commit Jenkins just tested: `SHA=$(git rev-parse HEAD)`.
+2. Using a Jenkins **Secret Text** credential named `github-actions-token`
+   (a GitHub PAT — never printed to the console), it calls the GitHub REST
+   API to dispatch `.github/workflows/cd.yml`, passing that SHA as the
+   `commit_sha` input.
+
+Because this is a normal pipeline stage (not a `post` block), it only runs if
+every earlier stage succeeded — a failing CI stage stops the pipeline before
+this one is ever reached, so GitHub Actions CD is never triggered.
+
+### GitHub Actions CD (`.github/workflows/cd.yml`)
+
+- **Not** triggered by pushes. Its only trigger is the `workflow_dispatch`
+  call Jenkins makes, carrying the Jenkins-tested commit as the `commit_sha`
+  input.
+- Checks out that **exact commit** (`ref: ${{ inputs.commit_sha }}`) — the
+  commit Jenkins approved, not whatever happens to be newest on `main` by the
+  time the job runs.
+- Tags every image with that same commit SHA (`IMAGE_TAG=${{
+  inputs.commit_sha }}`), so the version tested, the version built, and the
+  version deployed are always identical.
+- Does **not** re-run Jenkins's lint/typecheck/test steps — GitHub Actions
+  here is deployment only.
+- Builds each of the three images **once** and pushes it to both registries,
+  rolls the ECS service, then notifies Slack
+  (`aws/scripts/build-and-push.sh` + `aws/scripts/deploy.sh`, both unchanged).
+
+Required repo config (**Settings → Secrets and variables → Actions**):
+secrets `AWS_DEPLOY_ROLE_ARN` (an IAM role trusted via GitHub OIDC — see
+`docs/RUNBOOK.md` §4.2), `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`, and variable
+`AWS_REGION` = `ap-south-1`. `SLACK_WEBHOOK_URL` is an optional secret. No AWS
+keys are stored.
+
+### Docker Hub and AWS ECR
+
+Both registries get the **same image bytes** — each image is built once,
+then tagged and pushed twice, so nothing can drift between the mirror and
+production:
+
+- **Docker Hub** — secondary/mirror registry.
+- **AWS ECR** — the production registry; this is what ECS Fargate pulls from.
+
+### AWS ECS Fargate
+
+Production runtime — cluster `trekeasy-cluster`, service `trekeasy-service`,
+region `ap-south-1` (see [AWS ECS on Fargate](#aws-ecs-on-fargate) below for
+full details). `aws/scripts/deploy.sh` points the existing service at a new
+task-definition revision using the new image tag and waits for the rollout to
+finish. It does not create or modify the cluster, service, or IAM roles —
+those already exist and are managed outside this repo.
+
+### Slack notifications
+
+Once CD finishes (success or failure), a message is posted to **#trekeasy**
+via the `SLACK_WEBHOOK_URL` secret. If that secret isn't set, the notification
+step is skipped (not failed).
+
+### `.github/workflows/ci.yml`
+
+A separate, existing workflow — runs on every push and PR into `main`: lint,
+typecheck, test, build, for both services across Node 18 and 20, with build
+artifacts uploaded. It does not deploy anything and is unrelated to the
+Jenkins → GitHub Actions CD flow described above.
+
+### Full deployment flow
+
+1. A developer pushes to `main` on GitHub.
+2. Jenkins CI runs: `Checkout` → `Backend` → `Frontend` → `Archive`.
+3. If CI succeeds, Jenkins triggers the GitHub Actions `CD` workflow with the
+   tested commit SHA.
+4. GitHub Actions checks out that exact commit and builds the three Docker
+   images.
+5. The same images are pushed to Docker Hub and AWS ECR.
+6. GitHub Actions updates the ECS Fargate service to the new images.
+7. GitHub Actions posts the result to Slack.
+
+**If Jenkins CI fails, deployment does not start.**
 
 ---
 

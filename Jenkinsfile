@@ -1,4 +1,4 @@
-// TrekEasy CI. Deployment itself is handled by GitHub Actions (.github/workflows/cd.yml) —
+//hello TrekEasy CI. Deployment itself is handled by GitHub Actions (.github/workflows/cd.yml) —
 // this pipeline only triggers it, via workflow_dispatch, once CI has passed.
 
 pipeline {
